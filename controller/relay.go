@@ -182,12 +182,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
-		StopAtExhaustion: common.SafeFailoverV1Enabled,
+		Ctx:                    c,
+		TokenGroup:             relayInfo.TokenGroup,
+		ModelName:              relayInfo.OriginModelName,
+		RequestPath:            c.Request.URL.Path,
+		Retry:                  common.GetPointer(0),
+		StopAtExhaustion:       common.SafeFailoverV1Enabled,
+		ExhaustiveSafeFailover: common.SafeFailoverV1Enabled,
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -359,9 +360,6 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 		return false
 	}
 	if common.SafeFailoverV1Enabled {
-		if retryTimes <= 0 {
-			return false
-		}
 		if _, ok := c.Get("specific_channel_id"); ok {
 			return false
 		}
