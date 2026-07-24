@@ -112,9 +112,16 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithPolicy(group, model, retry, requestPath, false)
+}
+
+// GetRandomSatisfiedChannelWithPolicy selects a channel for a retry tier.
+// When stopAtExhaustion is true, retry indexes beyond the available priority
+// tiers return no channel instead of repeatedly clamping to the lowest tier.
+func GetRandomSatisfiedChannelWithPolicy(group string, model string, retry int, requestPath string, stopAtExhaustion bool) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelWithPolicy(group, model, retry, requestPath, stopAtExhaustion)
 	}
 
 	channelSyncLock.RLock()
@@ -134,6 +141,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	}
 
 	if len(channels) == 1 {
+		if stopAtExhaustion && retry > 0 {
+			return nil, nil
+		}
 		if channel, ok := channelsIDM[channels[0]]; ok {
 			return channel, nil
 		}
@@ -154,6 +164,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
 
+	if stopAtExhaustion && retry >= len(uniquePriorities) {
+		return nil, nil
+	}
 	if retry >= len(uniquePriorities) {
 		retry = len(uniquePriorities) - 1
 	}
