@@ -115,6 +115,7 @@ func InitEnv() {
 		SysLog("SAFE_FAILOVER_IMAGE_GUARD_SECONDS must be positive; using 60")
 		SafeFailoverImageGuardSeconds = 60
 	}
+	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
 	// Initialize string variables with GetEnvOrDefaultString

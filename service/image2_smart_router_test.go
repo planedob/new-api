@@ -1,0 +1,127 @@
+package service
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+)
+
+func image2TestChannel(id, priority int, operations, resolutions []string, editsAccepted bool) *model.Channel {
+	setting := dto.ChannelSettings{Image2Capability: &dto.Image2ChannelCapability{
+		Enabled: true, Operations: operations, Resolutions: resolutions, EditsAccepted: editsAccepted, RoutePriority: priority,
+	}}
+	channel := &model.Channel{Id: id}
+	channel.SetSetting(setting)
+	if channel.GetSetting().Image2Capability == nil {
+		panic("image2 test channel lost capability setting")
+	}
+	return channel
+}
+
+func TestImage2SmartRouterDisabledKeepsLegacyPath(t *testing.T) {
+	old := common.Image2SmartRoutingEnabled
+	common.Image2SmartRoutingEnabled = false
+	t.Cleanup(func() { common.Image2SmartRoutingEnabled = old })
+	c, _ := gin.CreateTestContext(nil)
+	router, err := NewImage2SmartRouter(c, &relaycommon.RelayInfo{OriginModelName: "gpt-image-2", RelayMode: relayconstant.RelayModeImagesGenerations}, &dto.ImageRequest{})
+	require.NoError(t, err)
+	require.Nil(t, router)
+}
+
+func TestImage2SmartRouterResolutionAndEditFiltering(t *testing.T) {
+	web := image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)
+	codex := image2TestChannel(2, 20, []string{"generations", "edits"}, []string{"1024", "2048"}, true)
+	adobe := image2TestChannel(3, 30, []string{"generations", "edits"}, []string{"1024", "2048", "uhd"}, false)
+
+	for _, test := range []struct {
+		name, resolution, operation string
+		want                        []int
+	}{
+		{"1024 generation", "1024", "generations", []int{1, 2, 3}},
+		{"2048 generation", "2048", "generations", []int{2, 3}},
+		{"uhd generation", "uhd", "generations", []int{3}},
+		{"edits excludes unaccepted", "1024", "edits", []int{2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			router := newImage2SmartRouter(Image2RequestCapability{Resolution: test.resolution, Operation: test.operation, N: 1}, []*model.Channel{adobe, codex, web})
+			got := make([]int, 0, len(test.want))
+			for range test.want {
+				channel, err := router.Next()
+				require.Nil(t, err)
+				got = append(got, channel.Id)
+			}
+			require.Equal(t, test.want, got)
+			_, err := router.Next()
+			require.True(t, types.IsSkipRetryError(err))
+		})
+	}
+}
+
+// This simulates isolated fake upstreams: 503, 503, then 200. It exercises
+// the same ordered candidate chain and safe replay decision used by Relay.
+func TestImage2FakeUpstream503Then503Then200(t *testing.T) {
+	router := newImage2SmartRouter(Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1}, []*model.Channel{
+		image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false),
+		image2TestChannel(2, 20, []string{"generations"}, []string{"1024"}, false),
+		image2TestChannel(3, 30, []string{"generations"}, []string{"1024"}, false),
+	})
+	statuses := []int{http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusOK}
+	servers := make([]*httptest.Server, 0, len(statuses))
+	for _, status := range statuses {
+		fakeStatus := status
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(fakeStatus) }))
+		servers = append(servers, server)
+		t.Cleanup(server.Close)
+	}
+	called := make([]int, 0, len(statuses))
+	for index := range statuses {
+		channel, err := router.Next()
+		require.Nil(t, err)
+		called = append(called, channel.Id)
+		response, requestErr := http.Get(servers[index].URL)
+		require.NoError(t, requestErr)
+		status := response.StatusCode
+		response.Body.Close()
+		if status == http.StatusOK {
+			break
+		}
+		decision := EvaluateSafeFailover(SafeFailoverInput{RelayMode: relayconstant.RelayModeImagesGenerations, ModelName: "gpt-image-2", Error: types.NewOpenAIError(errors.New("fake upstream"), "", status)})
+		require.True(t, decision.Retry)
+	}
+	require.Equal(t, []int{1, 2, 3}, called)
+}
+
+func TestParseImage2RequestCapability(t *testing.T) {
+	info := &relaycommon.RelayInfo{OriginModelName: "gpt-image-2", RelayMode: relayconstant.RelayModeImagesEdits}
+	capability, err := ParseImage2RequestCapability(info, &dto.ImageRequest{Size: "4096x4096"})
+	require.NoError(t, err)
+	require.Equal(t, "edits", capability.Operation)
+	require.Equal(t, "uhd", capability.Resolution)
+}
+
+func TestImage2SafeFailoverStopsDeterministicErrors(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		err   *types.NewAPIError
+		retry bool
+	}{
+		{"503 can move to next fake upstream", types.NewOpenAIError(errors.New("unavailable"), "", http.StatusServiceUnavailable), true},
+		{"400 does not move", types.NewOpenAIError(errors.New("bad request"), "", http.StatusBadRequest), false},
+		{"accepted task does not move", types.NewOpenAIError(errors.New("task_id=abc"), "", http.StatusServiceUnavailable), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decision := EvaluateSafeFailover(SafeFailoverInput{RelayMode: relayconstant.RelayModeImagesGenerations, ModelName: "gpt-image-2", Error: test.err})
+			require.Equal(t, test.retry, decision.Retry)
+		})
+	}
+}

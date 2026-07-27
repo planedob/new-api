@@ -7,6 +7,23 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// Image2Capability is an opt-in declaration used by the Image2 smart
+	// router. It deliberately describes capabilities instead of channel IDs so
+	// operators can change upstreams without a code deployment.
+	Image2Capability *Image2ChannelCapability `json:"image2_capability,omitempty"`
+}
+
+// Image2ChannelCapability declares the Image2 request shapes an upstream can
+// safely accept. RoutePriority is only compared among compatible candidates;
+// it is not a price, channel priority, or weight.
+type Image2ChannelCapability struct {
+	Enabled       bool     `json:"enabled,omitempty"`
+	Operations    []string `json:"operations,omitempty"`  // generations, edits
+	Resolutions   []string `json:"resolutions,omitempty"` // 1024, 2048, uhd
+	Qualities     []string `json:"qualities,omitempty"`
+	MaxN          uint     `json:"max_n,omitempty"` // zero means no declared limit
+	RoutePriority int      `json:"route_priority,omitempty"`
+	EditsAccepted bool     `json:"edits_accepted,omitempty"`
 }
 
 type VertexKeyType string

@@ -146,6 +146,10 @@ var SafeFailoverMaxAttempts = 0
 // Reaching this bound blocks failover; it never triggers a retry.
 var SafeFailoverImageGuardSeconds = 60
 
+// Image2SmartRoutingEnabled gates capability-driven routing for gpt-image-2.
+// It defaults off so a deployment preserves the established channel selector.
+var Image2SmartRoutingEnabled = false
+
 // EntitlementFeatureEnabled gates the directed entitlement enforcement path.
 // Operators can set ENTITLEMENT_FEATURE_ENABLED=false for an emergency rollback
 // without deleting package, user-grant or token-grant records.
