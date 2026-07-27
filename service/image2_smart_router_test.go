@@ -107,6 +107,22 @@ func TestParseImage2RequestCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "edits", capability.Operation)
 	require.Equal(t, "uhd", capability.Resolution)
+	capability, err = ParseImage2RequestCapability(info, &dto.ImageRequest{Size: "auto"})
+	require.NoError(t, err)
+	require.Equal(t, "1024", capability.Resolution)
+}
+
+func TestImage2SmartRouterExcludesChannelWithoutCapabilityMetadata(t *testing.T) {
+	configured := image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)
+	unconfigured := &model.Channel{Id: 2}
+	router := newImage2SmartRouter(Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1}, []*model.Channel{unconfigured, configured})
+
+	channel, err := router.Next()
+	require.Nil(t, err)
+	require.Equal(t, configured.Id, channel.Id)
+	require.Contains(t, router.DecisionSummary(), "2:image2_capability_not_enabled")
+	_, err = router.Next()
+	require.True(t, types.IsSkipRetryError(err))
 }
 
 func TestImage2SafeFailoverStopsDeterministicErrors(t *testing.T) {

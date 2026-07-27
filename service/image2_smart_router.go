@@ -69,7 +69,9 @@ func ParseImage2RequestCapability(info *relaycommon.RelayInfo, request *dto.Imag
 
 func image2Resolution(size string) (string, error) {
 	size = strings.ToLower(strings.TrimSpace(size))
-	if size == "" || size == "1024" || size == "1024x1024" {
+	// OpenAI permits "auto". The first routing version deliberately maps it to
+	// the same conservative default tier as an omitted size.
+	if size == "" || size == "auto" || size == "1024" || size == "1024x1024" {
 		return "1024", nil
 	}
 	if size == "2048" || size == "2048x2048" {
