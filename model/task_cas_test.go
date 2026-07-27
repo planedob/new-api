@@ -15,6 +15,30 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("ENTITLEMENT_TEST_MYSQL") == "1" {
+		if os.Getenv("SQL_DSN") == "" {
+			panic("ENTITLEMENT_TEST_MYSQL requires SQL_DSN")
+		}
+		common.UsingSQLite = false
+		common.UsingMySQL = false
+		common.UsingPostgreSQL = false
+		common.IsMasterNode = true
+		common.RedisEnabled = false
+		common.BatchUpdateEnabled = false
+		common.LogConsumeEnabled = true
+		if err := InitDB(); err != nil {
+			panic("failed to initialize MySQL test db: " + err.Error())
+		}
+		sqlDB, err := DB.DB()
+		if err != nil {
+			panic("failed to get MySQL test db: " + err.Error())
+		}
+		sqlDB.SetMaxOpenConns(20)
+		exitCode := m.Run()
+		_ = sqlDB.Close()
+		os.Exit(exitCode)
+	}
+
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		panic("failed to open test db: " + err.Error())

@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -233,6 +234,80 @@ func TestEntitlementPackageTimeBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, grant)
 	require.False(t, protected)
+}
+
+func TestEntitlementQuotaConcurrentReservationAndRefundMySQL(t *testing.T) {
+	if !common.UsingMySQL {
+		t.Skip("requires ENTITLEMENT_TEST_MYSQL=1 with a local MySQL SQL_DSN")
+	}
+
+	setupEntitlementTestDB(t)
+	pkg, user, token := seedEntitlementScenario(t)
+	pkg.DailyQuota = 3
+	pkg.TotalQuota = 3
+	require.NoError(t, SaveEntitlementPackage(pkg))
+
+	grant, _, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", time.Now())
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&EntitlementDailyUsage{
+		TokenEntitlementId: grant.TokenGrant.Id,
+		UsageDate:          grant.UsageDate,
+		UpdatedTime:        time.Now().Unix(),
+	}).Error)
+
+	const contenders = 10
+	start := make(chan struct{})
+	results := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- AdjustEntitlementQuota(
+				grant.TokenGrant.Id, grant.UsageDate, 1, grant.DailyQuota, grant.TotalQuota,
+			)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for result := range results {
+		if result == nil {
+			successes++
+			continue
+		}
+		var accessErr *EntitlementAccessError
+		require.True(t, errors.As(result, &accessErr), "unexpected concurrent reservation error: %v", result)
+		require.Equal(t, "entitlement_total_quota_exhausted", accessErr.Code)
+	}
+	require.Equal(t, 3, successes)
+
+	var storedGrant TokenEntitlement
+	require.NoError(t, DB.First(&storedGrant, grant.TokenGrant.Id).Error)
+	require.Equal(t, successes, storedGrant.UsedQuota)
+	usage, err := GetEntitlementDailyUsage(grant.TokenGrant.Id, grant.UsageDate)
+	require.NoError(t, err)
+	require.Equal(t, successes, usage.UsedQuota)
+
+	// Simulate a failed request after its single-quota reservation, then retry it.
+	require.NoError(t, AdjustEntitlementQuota(grant.TokenGrant.Id, grant.UsageDate, -1, grant.DailyQuota, grant.TotalQuota))
+	require.NoError(t, DB.First(&storedGrant, grant.TokenGrant.Id).Error)
+	require.Equal(t, 2, storedGrant.UsedQuota)
+
+	require.NoError(t, AdjustEntitlementQuota(grant.TokenGrant.Id, grant.UsageDate, 1, grant.DailyQuota, grant.TotalQuota))
+	err = AdjustEntitlementQuota(grant.TokenGrant.Id, grant.UsageDate, 1, grant.DailyQuota, grant.TotalQuota)
+	var accessErr *EntitlementAccessError
+	require.True(t, errors.As(err, &accessErr))
+	require.Equal(t, "entitlement_total_quota_exhausted", accessErr.Code)
+
+	require.NoError(t, DB.First(&storedGrant, grant.TokenGrant.Id).Error)
+	require.Equal(t, 3, storedGrant.UsedQuota)
+	usage, err = GetEntitlementDailyUsage(grant.TokenGrant.Id, grant.UsageDate)
+	require.NoError(t, err)
+	require.Equal(t, 3, usage.UsedQuota)
 }
 
 func TestEntitlementRequestLimitsAndDailyReset(t *testing.T) {
