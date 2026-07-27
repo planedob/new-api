@@ -164,10 +164,11 @@ func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 	require.NoError(t, DB.Create(otherToken).Error)
 
 	tests := []struct {
-		name      string
-		status    int
-		startTime int64
-		endTime   int64
+		name          string
+		status        int
+		startTime     int64
+		endTime       int64
+		deletePackage bool
 	}{
 		{
 			name:   "disabled",
@@ -183,6 +184,11 @@ func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 			status:  EntitlementStatusEnabled,
 			endTime: now.Add(-time.Minute).Unix(),
 		},
+		{
+			name:          "deleted",
+			status:        EntitlementStatusEnabled,
+			deletePackage: true,
+		},
 	}
 
 	for _, test := range tests {
@@ -191,6 +197,9 @@ func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 			pkg.StartTime = test.startTime
 			pkg.EndTime = test.endTime
 			require.NoError(t, SaveEntitlementPackage(pkg))
+			if test.deletePackage {
+				require.NoError(t, DB.Delete(pkg).Error)
+			}
 
 			grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
 			require.NoError(t, err)
