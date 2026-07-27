@@ -334,6 +334,9 @@ func SetApiRouter(router *gin.Engine) {
 		groupRoute.Use(middleware.AdminAuth())
 		{
 			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/token-visibility", controller.GetTokenGroupVisibilityPolicies)
+			groupRoute.PUT("/token-visibility", controller.SaveTokenGroupVisibilityPolicy)
+			groupRoute.DELETE("/token-visibility/:group", controller.DeleteTokenGroupVisibilityPolicy)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")
