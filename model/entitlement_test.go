@@ -151,19 +151,46 @@ func TestResolveTokenEntitlementAndExclusiveProtection(t *testing.T) {
 	require.Nil(t, grant)
 }
 
-func TestEntitlementClosedOrExpiredDoesNotFallBack(t *testing.T) {
+func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 	setupEntitlementTestDB(t)
 	pkg, user, token := seedEntitlementScenario(t)
-	pkg.EndTime = time.Now().Add(-time.Minute).Unix()
-	require.NoError(t, SaveEntitlementPackage(pkg))
+	now := time.Now()
 
-	grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", time.Now())
-	require.Nil(t, grant)
-	require.True(t, protected)
-	var accessErr *EntitlementAccessError
-	require.True(t, errors.As(err, &accessErr))
-	require.Equal(t, "entitlement_inactive", accessErr.Code)
-	require.Equal(t, "活动已结束", accessErr.Message)
+	tests := []struct {
+		name      string
+		status    int
+		startTime int64
+		endTime   int64
+	}{
+		{
+			name:   "disabled",
+			status: EntitlementStatusDisabled,
+		},
+		{
+			name:      "not started",
+			status:    EntitlementStatusEnabled,
+			startTime: now.Add(time.Minute).Unix(),
+		},
+		{
+			name:    "expired",
+			status:  EntitlementStatusEnabled,
+			endTime: now.Add(-time.Minute).Unix(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pkg.Status = test.status
+			pkg.StartTime = test.startTime
+			pkg.EndTime = test.endTime
+			require.NoError(t, SaveEntitlementPackage(pkg))
+
+			grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
+			require.NoError(t, err)
+			require.Nil(t, grant)
+			require.False(t, protected)
+		})
+	}
 }
 
 func TestEntitlementRequestLimitsAndDailyReset(t *testing.T) {
