@@ -154,7 +154,14 @@ func TestResolveTokenEntitlementAndExclusiveProtection(t *testing.T) {
 func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 	setupEntitlementTestDB(t)
 	pkg, user, token := seedEntitlementScenario(t)
-	now := time.Now()
+	now := time.Unix(time.Now().Unix(), 0)
+	otherUser := &User{Id: 102, Username: "historical-user", AffCode: "historical-user-102", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(otherUser).Error)
+	otherToken := &Token{
+		Id: 202, UserId: otherUser.Id, Key: "historical-token", Name: "historical",
+		Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true,
+	}
+	require.NoError(t, DB.Create(otherToken).Error)
 
 	tests := []struct {
 		name      string
@@ -189,8 +196,34 @@ func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 			require.NoError(t, err)
 			require.Nil(t, grant)
 			require.False(t, protected)
+
+			grant, protected, err = ResolveTokenEntitlement(otherToken.Id, otherUser.Id, "grok-image", now)
+			require.NoError(t, err)
+			require.Nil(t, grant)
+			require.False(t, protected)
 		})
 	}
+}
+
+func TestEntitlementPackageTimeBoundaries(t *testing.T) {
+	setupEntitlementTestDB(t)
+	pkg, user, token := seedEntitlementScenario(t)
+	now := time.Unix(time.Now().Unix(), 0)
+
+	pkg.StartTime = now.Unix()
+	require.NoError(t, SaveEntitlementPackage(pkg))
+	grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
+	require.NoError(t, err)
+	require.NotNil(t, grant)
+	require.True(t, protected)
+
+	pkg.StartTime = 0
+	pkg.EndTime = now.Unix()
+	require.NoError(t, SaveEntitlementPackage(pkg))
+	grant, protected, err = ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
+	require.NoError(t, err)
+	require.Nil(t, grant)
+	require.False(t, protected)
 }
 
 func TestEntitlementRequestLimitsAndDailyReset(t *testing.T) {
