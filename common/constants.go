@@ -147,6 +147,10 @@ var SafeFailoverMaxAttempts = 0
 // Reaching this bound blocks failover; it never triggers a retry.
 var SafeFailoverImageGuardSeconds = 60
 
+// Image2SmartRoutingEnabled gates capability-driven routing for gpt-image-2.
+// It defaults off so a deployment preserves the established channel selector.
+var Image2SmartRoutingEnabled = false
+
 //var RootUserEmail = ""
 
 var IsMasterNode bool

@@ -17,12 +17,28 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// Image2Capability is opt-in capability metadata for gpt-image-2 routing.
+	// A nil or disabled value must never be treated as a capability claim.
+	Image2Capability *Image2ChannelCapability `json:"image2_capability,omitempty"`
 	// HTTPProtocol controls outbound HTTP version negotiation for this channel.
 	// Accepted values: "", "auto" (default), "http1".
 	HTTPProtocol string `json:"http_protocol,omitempty"`
 	// HTTP2ConnectionShards spreads HTTP/2 traffic across N independent transports
 	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
 	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
+}
+
+// Image2ChannelCapability describes the requests a channel is explicitly
+// prepared to serve. It is intentionally provider-neutral so routing can
+// remain deterministic without exposing upstream credentials or behavior.
+type Image2ChannelCapability struct {
+	Enabled       bool     `json:"enabled,omitempty"`
+	Operations    []string `json:"operations,omitempty"`
+	Resolutions   []string `json:"resolutions,omitempty"`
+	Qualities     []string `json:"qualities,omitempty"`
+	MaxN          uint     `json:"max_n,omitempty"`
+	RoutePriority int      `json:"route_priority,omitempty"`
+	EditsAccepted bool     `json:"edits_accepted,omitempty"`
 }
 
 const (

@@ -123,6 +123,7 @@ func InitEnv() {
 		SysLog("SAFE_FAILOVER_IMAGE_GUARD_SECONDS must be positive; using 60")
 		SafeFailoverImageGuardSeconds = 60
 	}
+	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
 
 	// Initialize string variables with GetEnvOrDefaultString
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
