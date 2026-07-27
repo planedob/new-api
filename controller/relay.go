@@ -130,8 +130,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if imageRequest, ok := request.(*dto.ImageRequest); ok {
 		image2Router, err = service.NewImage2SmartRouter(c, relayInfo, imageRequest)
 		if err != nil {
-			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
-			return
+			// Smart routing is an opt-in optimization. Any capability parsing,
+			// group resolution, or candidate lookup failure must preserve the
+			// established selector instead of rejecting a valid client request.
+			logger.LogWarn(c, fmt.Sprintf("image2 smart routing unavailable; using legacy routing: %s", err.Error()))
+			image2Router = nil
 		}
 		if image2Router != nil {
 			c.Set("image2_smart_router_active", true)
