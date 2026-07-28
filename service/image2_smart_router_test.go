@@ -38,6 +38,26 @@ func TestImage2SmartRouterDisabledKeepsLegacyPath(t *testing.T) {
 	require.Nil(t, router)
 }
 
+func TestImage2SmartRouterSpecificChannelKeepsPinnedLegacyPath(t *testing.T) {
+	old := common.Image2SmartRoutingEnabled
+	common.Image2SmartRoutingEnabled = true
+	t.Cleanup(func() { common.Image2SmartRoutingEnabled = old })
+
+	c, _ := gin.CreateTestContext(nil)
+	c.Set("specific_channel_id", "47")
+	router, err := NewImage2SmartRouter(
+		c,
+		&relaycommon.RelayInfo{
+			OriginModelName: "gpt-image-2",
+			RelayMode:       relayconstant.RelayModeImagesGenerations,
+		},
+		&dto.ImageRequest{Size: "1024x1024"},
+	)
+
+	require.NoError(t, err)
+	require.Nil(t, router, "a specifically selected channel must bypass smart routing")
+}
+
 func TestImage2SmartRouterResolutionAndEditFiltering(t *testing.T) {
 	web := image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)
 	codex := image2TestChannel(2, 20, []string{"generations", "edits"}, []string{"1024", "2048"}, true)
@@ -123,6 +143,29 @@ func TestImage2SmartRouterExcludesChannelWithoutCapabilityMetadata(t *testing.T)
 	require.Contains(t, router.DecisionSummary(), "2:image2_capability_not_enabled")
 	_, err = router.Next()
 	require.True(t, types.IsSkipRetryError(err))
+}
+
+func TestImage2SmartRouterFallsBackOnlyWhenAllCapabilitiesAreMissing(t *testing.T) {
+	unconfigured := []*model.Channel{{Id: 1}, {Id: 2}}
+	request := Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1}
+	router, capabilityConfigured := newImage2SmartRouterIfConfigured(request, unconfigured)
+	require.False(t, capabilityConfigured)
+	require.Nil(t, router, "a capability migration omission must preserve legacy routing")
+
+	configuredButIncompatible := image2TestChannel(
+		3,
+		10,
+		[]string{"generations"},
+		[]string{"uhd"},
+		false,
+	)
+	configuredChannels := append(unconfigured, configuredButIncompatible)
+	router, capabilityConfigured = newImage2SmartRouterIfConfigured(request, configuredChannels)
+	require.True(t, capabilityConfigured)
+	require.NotNil(t, router, "configured but incompatible capabilities must remain fail-closed")
+	_, routeErr := router.Next()
+	require.True(t, types.IsSkipRetryError(routeErr))
+	require.Contains(t, router.DecisionSummary(), "resolution_unsupported")
 }
 
 func TestImage2SmartRouterQualityFiltering(t *testing.T) {
