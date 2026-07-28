@@ -901,7 +901,7 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
-	return nil
+	return channelParams.Image2Capability.Validate()
 }
 
 func (channel *Channel) GetSetting() dto.ChannelSettings {

@@ -1,5 +1,10 @@
 package dto
 
+import (
+	"fmt"
+	"strings"
+)
+
 type ChannelSettings struct {
 	ForceFormat            bool   `json:"force_format,omitempty"`
 	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
@@ -24,6 +29,55 @@ type Image2ChannelCapability struct {
 	MaxN          uint     `json:"max_n,omitempty"` // zero means no declared limit
 	RoutePriority int      `json:"route_priority,omitempty"`
 	EditsAccepted bool     `json:"edits_accepted,omitempty"`
+}
+
+func (capability *Image2ChannelCapability) Validate() error {
+	if capability == nil {
+		return nil
+	}
+	if !capability.Enabled {
+		return nil
+	}
+	if len(capability.Operations) == 0 {
+		return fmt.Errorf("image2_capability.operations is required when enabled")
+	}
+	if len(capability.Resolutions) == 0 {
+		return fmt.Errorf("image2_capability.resolutions is required when enabled")
+	}
+	if err := validateImage2CapabilityValues("operations", capability.Operations, map[string]struct{}{
+		"generations": {},
+		"edits":       {},
+	}); err != nil {
+		return err
+	}
+	if err := validateImage2CapabilityValues("resolutions", capability.Resolutions, map[string]struct{}{
+		"1024": {},
+		"2048": {},
+		"uhd":  {},
+	}); err != nil {
+		return err
+	}
+	for _, quality := range capability.Qualities {
+		if strings.TrimSpace(quality) == "" {
+			return fmt.Errorf("image2_capability.qualities cannot contain an empty value")
+		}
+	}
+	return nil
+}
+
+func validateImage2CapabilityValues(field string, values []string, allowed map[string]struct{}) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := allowed[normalized]; !ok {
+			return fmt.Errorf("image2_capability.%s contains unsupported value %q", field, value)
+		}
+		if _, duplicate := seen[normalized]; duplicate {
+			return fmt.Errorf("image2_capability.%s contains duplicate value %q", field, value)
+		}
+		seen[normalized] = struct{}{}
+	}
+	return nil
 }
 
 type VertexKeyType string
