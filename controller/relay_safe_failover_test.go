@@ -62,6 +62,26 @@ func TestInitialContextChannelIsNeverReusedForRetry(t *testing.T) {
 	require.False(t, shouldUseInitialContextChannel(info, retryParam))
 }
 
+func TestGetChannelKeepsSpecificallySelectedInitialChannel(t *testing.T) {
+	c := safeFailoverContext()
+	c.Set("specific_channel_id", "47")
+	c.Set("channel_id", 47)
+	c.Set("channel_type", 1)
+	c.Set("channel_name", "pinned-adobe")
+	c.Set("auto_ban", true)
+
+	info := &relaycommon.RelayInfo{OriginModelName: "gpt-image-2"}
+	retryParam := &service.RetryParam{
+		Retry:        common.GetPointer(0),
+		Image2Router: nil, // NewImage2SmartRouter bypasses pinned requests.
+	}
+
+	channel, err := getChannel(c, info, retryParam)
+	require.Nil(t, err)
+	require.Equal(t, 47, channel.Id)
+	require.Equal(t, "pinned-adobe", channel.Name)
+}
+
 func TestShouldRetrySafeModeAllowsChannelErrorsUntilCandidatesExhaust(t *testing.T) {
 	setupSafeFailoverTest(t)
 	c := safeFailoverContext()

@@ -105,6 +105,13 @@ func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *
 	if !Image2SmartRoutingEnabled() || !IsImage2SmartRoute(info) {
 		return nil, nil
 	}
+	if _, pinned := c.Get("specific_channel_id"); pinned {
+		// An administrator-selected channel is an explicit routing contract.
+		// Keep the established selector so the first attempt uses that channel
+		// and the existing retry guard prevents any automatic channel switch.
+		logger.LogInfo(c, "image2 smart routing bypassed for a specifically selected channel")
+		return nil, nil
+	}
 	req, err := ParseImage2RequestCapability(info, request)
 	if err != nil {
 		return nil, err
@@ -124,9 +131,28 @@ func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *
 	if err != nil {
 		return nil, err
 	}
-	router := newImage2SmartRouter(req, channels)
+	router, configured := newImage2SmartRouterIfConfigured(req, channels)
+	if !configured {
+		// A switch-only rollout must not turn a missing capability migration
+		// into a complete outage. Fall back only when no channel has opted in;
+		// once any capability is configured, incompatibility remains fail-closed.
+		logger.LogWarn(c, fmt.Sprintf(
+			"image2 smart routing has no configured capability in group %s; using legacy routing",
+			group,
+		))
+		return nil, nil
+	}
 	logger.LogInfo(c, fmt.Sprintf("image2 smart routing: request=%s/%s quality=%q n=%d group=%s candidates=%s", req.Operation, req.Resolution, req.Quality, req.N, group, router.DecisionSummary()))
 	return router, nil
+}
+
+func newImage2SmartRouterIfConfigured(req Image2RequestCapability, channels []*model.Channel) (*Image2SmartRouter, bool) {
+	for _, channel := range channels {
+		if capability := channel.GetSetting().Image2Capability; capability != nil && capability.Enabled {
+			return newImage2SmartRouter(req, channels), true
+		}
+	}
+	return nil, false
 }
 
 func newImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel) *Image2SmartRouter {
