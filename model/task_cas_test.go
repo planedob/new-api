@@ -2,22 +2,60 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
+func validateDisposableMySQLTestDB(dsn string, confirmedDB string) error {
+	if dsn == "" {
+		return fmt.Errorf("SQL_DSN is required")
+	}
+	if confirmedDB == "" {
+		return fmt.Errorf("ENTITLEMENT_TEST_MYSQL_DISPOSABLE_DB is required")
+	}
+
+	config, err := mysqlDriver.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("invalid SQL_DSN: %w", err)
+	}
+	if config.Net != "tcp" {
+		return fmt.Errorf("MySQL test database must use a local TCP connection")
+	}
+	host, _, err := net.SplitHostPort(config.Addr)
+	if err != nil {
+		return fmt.Errorf("invalid MySQL test address: %w", err)
+	}
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return fmt.Errorf("MySQL test database host must be local")
+	}
+	if config.DBName != confirmedDB {
+		return fmt.Errorf("confirmed disposable database does not match SQL_DSN database")
+	}
+	if !strings.HasPrefix(config.DBName, "p1verify") {
+		return fmt.Errorf("MySQL test database name must start with p1verify")
+	}
+	return nil
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv("ENTITLEMENT_TEST_MYSQL") == "1" {
-		if os.Getenv("SQL_DSN") == "" {
-			panic("ENTITLEMENT_TEST_MYSQL requires SQL_DSN")
+		if err := validateDisposableMySQLTestDB(
+			os.Getenv("SQL_DSN"),
+			os.Getenv("ENTITLEMENT_TEST_MYSQL_DISPOSABLE_DB"),
+		); err != nil {
+			panic("refusing unsafe entitlement MySQL test target: " + err.Error())
 		}
 		common.UsingSQLite = false
 		common.UsingMySQL = false
@@ -72,6 +110,50 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(m.Run())
+}
+
+func TestValidateDisposableMySQLTestDB(t *testing.T) {
+	t.Parallel()
+
+	validDSN := "root:local-only@tcp(127.0.0.1:13382)/p1verify_review?parseTime=true"
+	require.NoError(t, validateDisposableMySQLTestDB(validDSN, "p1verify_review"))
+
+	tests := []struct {
+		name        string
+		dsn         string
+		confirmedDB string
+	}{
+		{name: "missing dsn", confirmedDB: "p1verify_review"},
+		{name: "missing confirmation", dsn: validDSN},
+		{
+			name:        "remote host",
+			dsn:         "root:local-only@tcp(db.example.com:3306)/p1verify_review?parseTime=true",
+			confirmedDB: "p1verify_review",
+		},
+		{
+			name:        "unix socket",
+			dsn:         "root:local-only@unix(/tmp/mysql.sock)/p1verify_review?parseTime=true",
+			confirmedDB: "p1verify_review",
+		},
+		{
+			name:        "confirmation mismatch",
+			dsn:         validDSN,
+			confirmedDB: "p1verify_other",
+		},
+		{
+			name:        "database without disposable prefix",
+			dsn:         "root:local-only@tcp(127.0.0.1:13382)/production?parseTime=true",
+			confirmedDB: "production",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			require.Error(t, validateDisposableMySQLTestDB(test.dsn, test.confirmedDB))
+		})
+	}
 }
 
 func truncateTables(t *testing.T) {
