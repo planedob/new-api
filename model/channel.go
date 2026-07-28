@@ -990,7 +990,7 @@ func (channel *Channel) ValidateSettings() error {
 			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
 		}
 	}
-	return nil
+	return channelParams.Image2Capability.Validate()
 }
 
 func (channel *Channel) GetSetting() dto.ChannelSettings {

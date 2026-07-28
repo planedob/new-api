@@ -125,6 +125,38 @@ func TestImage2SmartRouterExcludesChannelWithoutCapabilityMetadata(t *testing.T)
 	require.True(t, types.IsSkipRetryError(err))
 }
 
+func TestImage2SmartRouterQualityFiltering(t *testing.T) {
+	channel := image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)
+	setting := channel.GetSetting()
+	setting.Image2Capability.Qualities = []string{"standard", "high"}
+	channel.SetSetting(setting)
+
+	t.Run("omitted quality uses provider default", func(t *testing.T) {
+		router := newImage2SmartRouter(Image2RequestCapability{
+			Operation:  "generations",
+			Resolution: "1024",
+			N:          1,
+		}, []*model.Channel{channel})
+
+		selected, err := router.Next()
+		require.Nil(t, err)
+		require.Equal(t, channel.Id, selected.Id)
+	})
+
+	t.Run("explicit unsupported quality is rejected", func(t *testing.T) {
+		router := newImage2SmartRouter(Image2RequestCapability{
+			Operation:  "generations",
+			Resolution: "1024",
+			Quality:    "ultra",
+			N:          1,
+		}, []*model.Channel{channel})
+
+		_, err := router.Next()
+		require.True(t, types.IsSkipRetryError(err))
+		require.Contains(t, router.DecisionSummary(), "1:quality_unsupported")
+	})
+}
+
 func TestImage2SafeFailoverStopsDeterministicErrors(t *testing.T) {
 	for _, test := range []struct {
 		name  string

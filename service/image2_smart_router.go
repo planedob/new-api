@@ -165,7 +165,9 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 	if !containsFold(capability.Resolutions, req.Resolution) {
 		return "resolution_unsupported"
 	}
-	if len(capability.Qualities) > 0 && !containsFold(capability.Qualities, req.Quality) {
+	// An omitted quality means "use the provider default". Only reject a
+	// channel when the client explicitly requests a quality it cannot serve.
+	if req.Quality != "" && len(capability.Qualities) > 0 && !containsFold(capability.Qualities, req.Quality) {
 		return "quality_unsupported"
 	}
 	if capability.MaxN > 0 && req.N > capability.MaxN {
