@@ -537,8 +537,12 @@ func ResolveTokenEntitlement(tokenId, userId int, modelName string, now time.Tim
 	protected := false
 	matchingIds := make([]int, 0)
 	packageById := make(map[int]EntitlementPackage)
+	nowUnix := now.Unix()
 	for _, item := range packages {
 		if !entitlementContainsModel(item.Models, modelName) {
+			continue
+		}
+		if active, _ := entitlementTimeActive(item.Status, item.StartTime, item.EndTime, nowUnix); !active {
 			continue
 		}
 		if !item.AllowPublicFallback {
@@ -564,7 +568,6 @@ func ResolveTokenEntitlement(tokenId, userId int, modelName string, now time.Tim
 	}
 
 	var firstInactiveReason string
-	nowUnix := now.Unix()
 	tokenGrantByPackage := make(map[int]TokenEntitlement, len(tokenGrants))
 	for _, item := range tokenGrants {
 		tokenGrantByPackage[item.PackageId] = item

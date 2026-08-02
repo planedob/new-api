@@ -4314,6 +4314,12 @@
     "Unset price": "Unset price",
     "Use the full-width table to scan prices, then select a row to edit it here.": "Use the full-width table to scan prices, then select a row to edit it here.",
     "extras": "extras",
-    "tiers": "tiers"
+    "tiers": "tiers",
+    "Failed to save visibility policies.": "Failed to save visibility policies.",
+    "Optional policies: public, targeted (with usernames), or hidden. They apply only when TOKEN_GROUP_VISIBILITY_ENABLED is enabled.": "Optional policies: public, targeted (with usernames), or hidden. They apply only when TOKEN_GROUP_VISIBILITY_ENABLED is enabled.",
+    "Save visibility policies": "Save visibility policies",
+    "Token group visibility": "Token group visibility",
+    "Token group visibility policies saved.": "Token group visibility policies saved.",
+    "Visibility policies must be a JSON array.": "Visibility policies must be a JSON array."
   }
 }

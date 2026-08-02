@@ -4314,6 +4314,12 @@
     "Unset price": "未设置价格",
     "Use the full-width table to scan prices, then select a row to edit it here.": "先在表格中快速浏览价格，然后选择一行在这里编辑。",
     "extras": "额外项",
-    "tiers": "档"
+    "tiers": "档",
+    "Failed to save visibility policies.": "保存可见性策略失败。",
+    "Optional policies: public, targeted (with usernames), or hidden. They apply only when TOKEN_GROUP_VISIBILITY_ENABLED is enabled.": "可选策略：public、targeted（需要用户名）或 hidden。仅在启用 TOKEN_GROUP_VISIBILITY_ENABLED 后生效。",
+    "Save visibility policies": "保存可见性策略",
+    "Token group visibility": "令牌分组可见性",
+    "Token group visibility policies saved.": "令牌分组可见性策略已保存。",
+    "Visibility policies must be a JSON array.": "可见性策略必须是 JSON 数组。"
   }
 }
