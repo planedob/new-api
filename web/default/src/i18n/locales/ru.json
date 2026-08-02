@@ -4314,6 +4314,12 @@
     "Unset price": "Цена не задана",
     "Use the full-width table to scan prices, then select a row to edit it here.": "Просмотрите цены в таблице, затем выберите строку для редактирования здесь.",
     "extras": "доп. пункты",
-    "tiers": "уровни"
+    "tiers": "уровни",
+    "Failed to save visibility policies.": "Не удалось сохранить политики видимости.",
+    "Optional policies: public, targeted (with usernames), or hidden. They apply only when TOKEN_GROUP_VISIBILITY_ENABLED is enabled.": "Необязательные политики: public, targeted (с именами пользователей) или hidden. Они применяются только при включённом TOKEN_GROUP_VISIBILITY_ENABLED.",
+    "Save visibility policies": "Сохранить политики видимости",
+    "Token group visibility": "Видимость групп токенов",
+    "Token group visibility policies saved.": "Политики видимости групп токенов сохранены.",
+    "Visibility policies must be a JSON array.": "Политики видимости должны быть массивом JSON."
   }
 }
