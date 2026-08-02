@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS `token_group_visibilities` (
   `start_time` bigint NOT NULL DEFAULT 0,
   `end_time` bigint NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uni_token_group_visibilities_group` (`group`),
+  UNIQUE KEY `idx_token_group_visibilities_group` (`group`),
   KEY `idx_token_group_visibilities_visibility` (`visibility`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
