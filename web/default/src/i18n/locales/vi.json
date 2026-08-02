@@ -4314,6 +4314,12 @@
     "Unset price": "Chưa đặt giá",
     "Use the full-width table to scan prices, then select a row to edit it here.": "Duyệt giá trong bảng, rồi chọn một hàng để chỉnh sửa tại đây.",
     "extras": "mục bổ sung",
-    "tiers": "tầng"
+    "tiers": "tầng",
+    "Failed to save visibility policies.": "Không thể lưu chính sách hiển thị.",
+    "Optional policies: public, targeted (with usernames), or hidden. They apply only when TOKEN_GROUP_VISIBILITY_ENABLED is enabled.": "Chính sách tùy chọn: public, targeted (kèm tên người dùng) hoặc hidden. Chỉ áp dụng khi TOKEN_GROUP_VISIBILITY_ENABLED được bật.",
+    "Save visibility policies": "Lưu chính sách hiển thị",
+    "Token group visibility": "Hiển thị nhóm token",
+    "Token group visibility policies saved.": "Đã lưu chính sách hiển thị nhóm token.",
+    "Visibility policies must be a JSON array.": "Chính sách hiển thị phải là một mảng JSON."
   }
 }

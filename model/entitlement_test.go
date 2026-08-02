@@ -2,6 +2,8 @@ package model
 
 import (
 	"errors"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,19 +153,270 @@ func TestResolveTokenEntitlementAndExclusiveProtection(t *testing.T) {
 	require.Nil(t, grant)
 }
 
-func TestEntitlementClosedOrExpiredDoesNotFallBack(t *testing.T) {
+func TestEntitlementInactivePackageDoesNotProtectPublicModel(t *testing.T) {
 	setupEntitlementTestDB(t)
 	pkg, user, token := seedEntitlementScenario(t)
-	pkg.EndTime = time.Now().Add(-time.Minute).Unix()
-	require.NoError(t, SaveEntitlementPackage(pkg))
+	now := time.Unix(time.Now().Unix(), 0)
+	otherUser := &User{Id: 102, Username: "historical-user", AffCode: "historical-user-102", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(otherUser).Error)
+	otherToken := &Token{
+		Id: 202, UserId: otherUser.Id, Key: "historical-token", Name: "historical",
+		Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true,
+	}
+	require.NoError(t, DB.Create(otherToken).Error)
 
-	grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", time.Now())
+	tests := []struct {
+		name          string
+		status        int
+		startTime     int64
+		endTime       int64
+		deletePackage bool
+	}{
+		{
+			name:   "disabled",
+			status: EntitlementStatusDisabled,
+		},
+		{
+			name:      "not started",
+			status:    EntitlementStatusEnabled,
+			startTime: now.Add(time.Minute).Unix(),
+		},
+		{
+			name:    "expired",
+			status:  EntitlementStatusEnabled,
+			endTime: now.Add(-time.Minute).Unix(),
+		},
+		{
+			name:          "deleted",
+			status:        EntitlementStatusEnabled,
+			deletePackage: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pkg.Status = test.status
+			pkg.StartTime = test.startTime
+			pkg.EndTime = test.endTime
+			require.NoError(t, SaveEntitlementPackage(pkg))
+			if test.deletePackage {
+				require.NoError(t, DB.Delete(pkg).Error)
+			}
+
+			grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
+			require.NoError(t, err)
+			require.Nil(t, grant)
+			require.False(t, protected)
+
+			grant, protected, err = ResolveTokenEntitlement(otherToken.Id, otherUser.Id, "grok-image", now)
+			require.NoError(t, err)
+			require.Nil(t, grant)
+			require.False(t, protected)
+		})
+	}
+}
+
+func TestEntitlementPackageTimeBoundaries(t *testing.T) {
+	setupEntitlementTestDB(t)
+	pkg, user, token := seedEntitlementScenario(t)
+	now := time.Unix(time.Now().Unix(), 0)
+
+	pkg.StartTime = now.Unix()
+	require.NoError(t, SaveEntitlementPackage(pkg))
+	grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
+	require.NoError(t, err)
+	require.NotNil(t, grant)
+	require.True(t, protected)
+
+	pkg.StartTime = 0
+	pkg.EndTime = now.Unix()
+	require.NoError(t, SaveEntitlementPackage(pkg))
+	grant, protected, err = ResolveTokenEntitlement(token.Id, user.Id, "grok-image", now)
+	require.NoError(t, err)
+	require.Nil(t, grant)
+	require.False(t, protected)
+}
+
+func TestEntitlementRevocationFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		revoke func(*testing.T, *UserEntitlement, *TokenEntitlement)
+	}{
+		{
+			name: "user disabled",
+			revoke: func(t *testing.T, userGrant *UserEntitlement, _ *TokenEntitlement) {
+				require.NoError(t, DB.Model(userGrant).Update("status", EntitlementStatusDisabled).Error)
+			},
+		},
+		{
+			name: "user soft deleted",
+			revoke: func(t *testing.T, userGrant *UserEntitlement, _ *TokenEntitlement) {
+				require.NoError(t, DB.Delete(userGrant).Error)
+			},
+		},
+		{
+			name: "token disabled",
+			revoke: func(t *testing.T, _ *UserEntitlement, tokenGrant *TokenEntitlement) {
+				require.NoError(t, DB.Model(tokenGrant).Update("status", EntitlementStatusDisabled).Error)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupEntitlementTestDB(t)
+			pkg, user, token := seedEntitlementScenario(t)
+			var userGrant UserEntitlement
+			require.NoError(t, DB.Where("package_id = ? AND user_id = ?", pkg.Id, user.Id).First(&userGrant).Error)
+			var tokenGrant TokenEntitlement
+			require.NoError(t, DB.Where("package_id = ? AND token_id = ?", pkg.Id, token.Id).First(&tokenGrant).Error)
+			test.revoke(t, &userGrant, &tokenGrant)
+
+			grant, protected, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", time.Now())
+			require.Nil(t, grant)
+			require.True(t, protected)
+			var accessErr *EntitlementAccessError
+			require.ErrorAs(t, err, &accessErr)
+			require.Equal(t, "entitlement_inactive", accessErr.Code)
+		})
+	}
+}
+
+func TestEntitlementPublicFallbackAndMixedProtection(t *testing.T) {
+	setupEntitlementTestDB(t)
+	pkg, user, token := seedEntitlementScenario(t)
+	otherUser := &User{Id: 102, Username: "fallback-user", AffCode: "fallback-user-102", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(otherUser).Error)
+	otherToken := &Token{
+		Id: 202, UserId: otherUser.Id, Key: "fallback-token", Name: "fallback",
+		Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true,
+	}
+	require.NoError(t, DB.Create(otherToken).Error)
+
+	pkg.AllowPublicFallback = true
+	require.NoError(t, SaveEntitlementPackage(pkg))
+	grant, protected, err := ResolveTokenEntitlement(otherToken.Id, otherUser.Id, "grok-image", time.Now())
+	require.NoError(t, err)
+	require.Nil(t, grant)
+	require.False(t, protected)
+
+	grant, protected, err = ResolveTokenEntitlement(token.Id, user.Id, "grok-image", time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, grant)
+	require.False(t, protected)
+
+	privatePkg := &EntitlementPackage{
+		Name:                "grok private mixed",
+		Status:              EntitlementStatusEnabled,
+		Group:               "grok-private-mixed",
+		Models:              "grok-image",
+		Priority:            20,
+		AllowPublicFallback: false,
+	}
+	require.NoError(t, SaveEntitlementPackage(privatePkg))
+	grant, protected, err = ResolveTokenEntitlement(otherToken.Id, otherUser.Id, "grok-image", time.Now())
 	require.Nil(t, grant)
 	require.True(t, protected)
 	var accessErr *EntitlementAccessError
+	require.ErrorAs(t, err, &accessErr)
+	require.Equal(t, "entitlement_required", accessErr.Code)
+}
+
+func TestEntitlementQuotaConcurrentReservationAndRefundSQL(t *testing.T) {
+	if !common.UsingMySQL && !common.UsingPostgreSQL {
+		if os.Getenv("ENTITLEMENT_TEST_MYSQL") == "1" || os.Getenv("ENTITLEMENT_TEST_POSTGRES") == "1" {
+			t.Fatal("requested entitlement SQL integration test did not initialize the selected database")
+		}
+		t.Skip("requires ENTITLEMENT_TEST_MYSQL=1 or ENTITLEMENT_TEST_POSTGRES=1 with a local disposable SQL_DSN")
+	}
+
+	setupEntitlementTestDB(t)
+	pkg, user, token := seedEntitlementScenario(t)
+	pkg.DailyQuota = 3
+	pkg.TotalQuota = 3
+	require.NoError(t, SaveEntitlementPackage(pkg))
+
+	grant, _, err := ResolveTokenEntitlement(token.Id, user.Id, "grok-image", time.Now())
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&EntitlementDailyUsage{
+		TokenEntitlementId: grant.TokenGrant.Id,
+		UsageDate:          grant.UsageDate,
+		UpdatedTime:        time.Now().Unix(),
+	}).Error)
+
+	const contenders = 10
+	runConcurrent := func(t *testing.T) int {
+		t.Helper()
+		start := make(chan struct{})
+		results := make(chan error, contenders)
+		var wg sync.WaitGroup
+		for range contenders {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- AdjustEntitlementQuota(
+					grant.TokenGrant.Id, grant.UsageDate, 1, grant.DailyQuota, grant.TotalQuota,
+				)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		successes := 0
+		for result := range results {
+			if result == nil {
+				successes++
+				continue
+			}
+			var accessErr *EntitlementAccessError
+			require.True(t, errors.As(result, &accessErr), "unexpected concurrent reservation error: %v", result)
+			require.Equal(t, "entitlement_total_quota_exhausted", accessErr.Code)
+		}
+		return successes
+	}
+
+	successes := runConcurrent(t)
+	require.Equal(t, 3, successes)
+
+	// Repeat from an empty daily row so the first concurrent request exercises
+	// the get-or-create path instead of only locking an existing row.
+	require.NoError(t, DB.Where("token_entitlement_id = ? AND usage_date = ?", grant.TokenGrant.Id, grant.UsageDate).
+		Delete(&EntitlementDailyUsage{}).Error)
+	require.NoError(t, DB.Model(&TokenEntitlement{}).Where("id = ?", grant.TokenGrant.Id).
+		Update("used_quota", 0).Error)
+	successes = runConcurrent(t)
+	require.Equal(t, 3, successes)
+	var dailyRows int64
+	require.NoError(t, DB.Model(&EntitlementDailyUsage{}).
+		Where("token_entitlement_id = ? AND usage_date = ?", grant.TokenGrant.Id, grant.UsageDate).
+		Count(&dailyRows).Error)
+	require.Equal(t, int64(1), dailyRows)
+
+	var storedGrant TokenEntitlement
+	require.NoError(t, DB.First(&storedGrant, grant.TokenGrant.Id).Error)
+	require.Equal(t, successes, storedGrant.UsedQuota)
+	usage, err := GetEntitlementDailyUsage(grant.TokenGrant.Id, grant.UsageDate)
+	require.NoError(t, err)
+	require.Equal(t, successes, usage.UsedQuota)
+
+	// Simulate a failed request after its single-quota reservation, then retry it.
+	require.NoError(t, AdjustEntitlementQuota(grant.TokenGrant.Id, grant.UsageDate, -1, grant.DailyQuota, grant.TotalQuota))
+	require.NoError(t, DB.First(&storedGrant, grant.TokenGrant.Id).Error)
+	require.Equal(t, 2, storedGrant.UsedQuota)
+
+	require.NoError(t, AdjustEntitlementQuota(grant.TokenGrant.Id, grant.UsageDate, 1, grant.DailyQuota, grant.TotalQuota))
+	err = AdjustEntitlementQuota(grant.TokenGrant.Id, grant.UsageDate, 1, grant.DailyQuota, grant.TotalQuota)
+	var accessErr *EntitlementAccessError
 	require.True(t, errors.As(err, &accessErr))
-	require.Equal(t, "entitlement_inactive", accessErr.Code)
-	require.Equal(t, "活动已结束", accessErr.Message)
+	require.Equal(t, "entitlement_total_quota_exhausted", accessErr.Code)
+
+	require.NoError(t, DB.First(&storedGrant, grant.TokenGrant.Id).Error)
+	require.Equal(t, 3, storedGrant.UsedQuota)
+	usage, err = GetEntitlementDailyUsage(grant.TokenGrant.Id, grant.UsageDate)
+	require.NoError(t, err)
+	require.Equal(t, 3, usage.UsedQuota)
 }
 
 func TestEntitlementRequestLimitsAndDailyReset(t *testing.T) {
