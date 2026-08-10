@@ -23,9 +23,11 @@ import { Sparkles, Users, ToggleLeft, X, Settings } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { renderGroupOption, selectFilter } from '../../helpers';
 import ParameterControl from './ParameterControl';
+import ImageRequestControls from './ImageRequestControls';
 import ImageUrlInput from './ImageUrlInput';
 import ConfigManager from './ConfigManager';
 import CustomRequestEditor from './CustomRequestEditor';
+import { isGptImage2Model } from '../../helpers';
 
 const SettingsPanel = ({
   inputs,
@@ -55,6 +57,7 @@ const SettingsPanel = ({
     customRequestMode,
     customRequestBody,
   };
+  const isGptImage2 = isGptImage2Model(inputs.model);
 
   return (
     <Card
@@ -189,16 +192,24 @@ const SettingsPanel = ({
           />
         </div>
 
-        {/* 参数控制组件 */}
-        <div className={customRequestMode ? 'opacity-50' : ''}>
-          <ParameterControl
+        {/* 图片参数 / 文字参数 */}
+        {isGptImage2 ? (
+          <ImageRequestControls
             inputs={inputs}
-            parameterEnabled={parameterEnabled}
             onInputChange={onInputChange}
-            onParameterToggle={onParameterToggle}
             disabled={customRequestMode}
           />
-        </div>
+        ) : (
+          <div className={customRequestMode ? 'opacity-50' : ''}>
+            <ParameterControl
+              inputs={inputs}
+              parameterEnabled={parameterEnabled}
+              onInputChange={onInputChange}
+              onParameterToggle={onParameterToggle}
+              disabled={customRequestMode}
+            />
+          </div>
+        )}
 
         {/* 流式输出开关 */}
         <div className={customRequestMode ? 'opacity-50' : ''}>
