@@ -522,12 +522,22 @@ func GetUserModels(c *gin.Context) {
 	if err != nil {
 		id = c.GetInt("id")
 	}
-	user, err := model.GetUserCache(id)
+	groups, err := service.GetUserSelectableTokenGroups(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	selectedGroup := strings.TrimSpace(c.Query("group"))
+	if selectedGroup != "" && selectedGroup != "auto" {
+		if _, ok := groups[selectedGroup]; !ok {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "selected group is not available",
+			})
+			return
+		}
+		groups = map[string]string{selectedGroup: groups[selectedGroup]}
+	}
 	var models []string
 	for group := range groups {
 		for _, g := range model.GetGroupEnabledModels(group) {
@@ -539,6 +549,9 @@ func GetUserModels(c *gin.Context) {
 	entitlementPackages, entitlementErr := model.GetUserEntitlementPackages(id, true)
 	if entitlementErr == nil {
 		for _, item := range entitlementPackages {
+			if selectedGroup != "" && selectedGroup != "auto" && item.Group != selectedGroup {
+				continue
+			}
 			for _, entitlementModel := range strings.Split(item.Models, ",") {
 				entitlementModel = strings.TrimSpace(entitlementModel)
 				if entitlementModel != "" && !common.StringsContains(models, entitlementModel) {

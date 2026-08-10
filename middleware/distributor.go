@@ -71,6 +71,10 @@ func Distribute() func(c *gin.Context) {
 				c.Set("entitlement_total_quota", entitlementGrant.TotalQuota)
 			}
 		}
+		if isPlaygroundImage2ChatRequest(c.Request.URL.Path, modelRequest.Model) {
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "gpt-image-2 must use the image generation or edit endpoint")
+			return
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -240,6 +244,17 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 
 func isPlaygroundPath(path string) bool {
 	return strings.HasPrefix(path, "/pg/")
+}
+
+func isPlaygroundImage2ChatRequest(path, modelName string) bool {
+	if !strings.HasPrefix(path, "/pg/chat/completions") {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	return normalized == "gpt-image-2" ||
+		strings.HasPrefix(normalized, "gpt-image-2-") ||
+		strings.HasPrefix(normalized, "gpt-image-2_") ||
+		strings.HasPrefix(normalized, "gpt-image-2.")
 }
 
 func isImageGenerationsPath(path string) bool {

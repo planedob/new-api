@@ -90,3 +90,23 @@ func TestGetModelFromRequestReadsMultipartImageEdit(t *testing.T) {
 		t.Fatalf("getModelFromRequest() = %#v, want model and group from multipart body", modelRequest)
 	}
 }
+
+func TestPlaygroundImage2ChatRequestIsRejected(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		path  string
+		model string
+		want  bool
+	}{
+		{name: "image2 chat", path: "/pg/chat/completions", model: "gpt-image-2", want: true},
+		{name: "image2 variant chat", path: "/pg/chat/completions", model: " GPT-IMAGE-2-4k ", want: true},
+		{name: "image endpoint", path: "/pg/images/generations", model: "gpt-image-2", want: false},
+		{name: "text chat", path: "/pg/chat/completions", model: "gpt-5.4", want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isPlaygroundImage2ChatRequest(testCase.path, testCase.model); got != testCase.want {
+				t.Fatalf("isPlaygroundImage2ChatRequest(%q, %q) = %v, want %v", testCase.path, testCase.model, got, testCase.want)
+			}
+		})
+	}
+}

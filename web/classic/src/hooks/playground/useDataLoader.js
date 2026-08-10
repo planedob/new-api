@@ -33,7 +33,9 @@ export const useDataLoader = (
 
   const loadModels = useCallback(async () => {
     try {
-      const res = await API.get(API_ENDPOINTS.USER_MODELS);
+      const params =
+        inputs.group && inputs.group !== 'auto' ? { group: inputs.group } : {};
+      const res = await API.get(API_ENDPOINTS.USER_MODELS, { params });
       const { success, message, data } = res.data;
 
       if (success) {
@@ -52,7 +54,7 @@ export const useDataLoader = (
     } catch (error) {
       showError(t('加载模型失败'));
     }
-  }, [inputs.model, handleInputChange, setModels, t]);
+  }, [inputs.group, inputs.model, handleInputChange, setModels, t]);
 
   const loadGroups = useCallback(async () => {
     try {
