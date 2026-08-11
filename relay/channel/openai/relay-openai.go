@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 
@@ -571,6 +572,12 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
+	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
+		if err := validateImageResponse(responseBody); err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+		}
+	}
+
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
@@ -590,6 +597,22 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	}
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
+}
+
+// validateImageResponse rejects an HTTP-success response that does not contain
+// an image result. It must run before the response is written to the client so
+// ImageHelper can avoid treating an empty response as a billable success.
+func validateImageResponse(responseBody []byte) error {
+	var imageResponse dto.ImageResponse
+	if err := common.Unmarshal(responseBody, &imageResponse); err != nil {
+		return fmt.Errorf("invalid image response: %w", err)
+	}
+	for _, item := range imageResponse.Data {
+		if strings.TrimSpace(item.Url) != "" || strings.TrimSpace(item.B64Json) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("image response contains no usable image data")
 }
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
