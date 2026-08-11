@@ -528,7 +528,22 @@ func GetUserModels(c *gin.Context) {
 		return
 	}
 	selectedGroup := strings.TrimSpace(c.Query("group"))
-	if selectedGroup != "" && selectedGroup != "auto" {
+	if selectedGroup == "auto" {
+		user, userErr := model.GetUserById(id, false)
+		if userErr != nil {
+			common.ApiError(c, userErr)
+			return
+		}
+		autoGroups, autoErr := service.GetUserSelectableAutoGroups(id, user.Group)
+		if autoErr != nil {
+			common.ApiError(c, autoErr)
+			return
+		}
+		groups = make(map[string]string, len(autoGroups))
+		for _, group := range autoGroups {
+			groups[group] = group
+		}
+	} else if selectedGroup != "" {
 		if _, ok := groups[selectedGroup]; !ok {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -549,8 +564,10 @@ func GetUserModels(c *gin.Context) {
 	entitlementPackages, entitlementErr := model.GetUserEntitlementPackages(id, true)
 	if entitlementErr == nil {
 		for _, item := range entitlementPackages {
-			if selectedGroup != "" && selectedGroup != "auto" && item.Group != selectedGroup {
-				continue
+			if selectedGroup != "" {
+				if _, ok := groups[item.Group]; !ok {
+					continue
+				}
 			}
 			for _, entitlementModel := range strings.Split(item.Models, ",") {
 				entitlementModel = strings.TrimSpace(entitlementModel)

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 )
 
 func setupTokenGroupVisibilityTestDB(t *testing.T) {
@@ -264,6 +265,52 @@ func TestPublicPolicyCannotExpandBaseGroupPermission(t *testing.T) {
 	}
 	if _, ok := groups["svip"]; ok {
 		t.Fatal("public visibility policy must not grant a group absent from base permission")
+	}
+}
+
+func TestSelectableAutoGroupsExcludeTargetedGroupsForNonTargets(t *testing.T) {
+	setupTokenGroupVisibilityTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
+	previousAutoGroups := setting.AutoGroups2JsonString()
+	if err := setting.UpdateAutoGroupsByJsonString(`["default","vip"]`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := setting.UpdateAutoGroupsByJsonString(previousAutoGroups); err != nil {
+			t.Fatalf("restore auto groups: %v", err)
+		}
+	})
+
+	target := createVisibilityTestUser(t, 1, "alice", "default")
+	nonTarget := createVisibilityTestUser(t, 2, "bob", "default")
+	if err := model.SaveTokenGroupVisibilityPolicy(model.TokenGroupVisibilityPolicy{
+		Group: "vip", Visibility: model.TokenGroupVisibilityTargeted, Usernames: []string{"alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range []struct {
+		name string
+		user *model.User
+		want []string
+	}{
+		{name: "target", user: target, want: []string{"default", "vip"}},
+		{name: "non-target", user: nonTarget, want: []string{"default"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			groups, err := service.GetUserSelectableAutoGroups(testCase.user.Id, testCase.user.Group)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(groups) != len(testCase.want) {
+				t.Fatalf("auto groups = %#v, want %#v", groups, testCase.want)
+			}
+			for index, want := range testCase.want {
+				if groups[index] != want {
+					t.Fatalf("auto groups = %#v, want %#v", groups, testCase.want)
+				}
+			}
+		})
 	}
 }
 

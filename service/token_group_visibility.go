@@ -68,3 +68,24 @@ func ValidateUserSelectableTokenGroup(userId int, group string) error {
 	}
 	return nil
 }
+
+// GetUserSelectableAutoGroups returns only configured auto groups that remain
+// selectable for this user. Auto must not bypass hidden or targeted policies.
+// A zero userId is kept for legacy/internal callers with no user identity.
+func GetUserSelectableAutoGroups(userId int, userGroup string) ([]string, error) {
+	autoGroups := GetUserAutoGroup(userGroup)
+	if userId <= 0 {
+		return autoGroups, nil
+	}
+	selectableGroups, err := GetUserSelectableTokenGroups(userId)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]string, 0, len(autoGroups))
+	for _, group := range autoGroups {
+		if _, ok := selectableGroups[group]; ok {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered, nil
+}

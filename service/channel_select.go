@@ -124,7 +124,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		if len(setting.GetAutoGroups()) == 0 {
 			return nil, selectGroup, errors.New("auto groups is not enabled")
 		}
-		autoGroups := GetUserAutoGroup(userGroup)
+		autoGroups, autoErr := GetUserSelectableAutoGroups(param.Ctx.GetInt("id"), userGroup)
+		if autoErr != nil {
+			return nil, selectGroup, autoErr
+		}
 
 		// startGroupIndex: the group index to start searching from
 		// startGroupIndex: 开始搜索的分组索引
@@ -209,7 +212,10 @@ func cacheGetRandomSatisfiedChannelExhaustive(param *RetryParam) (*model.Channel
 		return nil, param.TokenGroup, errors.New("auto groups is not enabled")
 	}
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
-	autoGroups := GetUserAutoGroup(userGroup)
+	autoGroups, autoErr := GetUserSelectableAutoGroups(param.Ctx.GetInt("id"), userGroup)
+	if autoErr != nil {
+		return nil, param.TokenGroup, autoErr
+	}
 	startGroupIndex := 0
 	if lastGroupIndex, exists := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex); exists {
 		if idx, ok := lastGroupIndex.(int); ok {

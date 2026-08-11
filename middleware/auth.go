@@ -382,10 +382,22 @@ func TokenAuth() func(c *gin.Context) {
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
+			if tokenGroup == "auto" {
+				autoGroups, selectableErr := service.GetUserSelectableAutoGroups(token.UserId, userGroup)
+				if selectableErr != nil || len(autoGroups) == 0 {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "无可用自动分组")
+					return
+				}
+			} else {
+				selectableGroups, selectableErr := service.GetUserSelectableTokenGroups(token.UserId)
+				if selectableErr != nil {
+					abortWithOpenAiMessage(c, http.StatusInternalServerError, common.TranslateMessage(c, i18n.MsgDatabaseError))
+					return
+				}
+				if _, ok := selectableGroups[tokenGroup]; !ok {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
+					return
+				}
 			}
 			// check group in common.GroupRatio
 			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
