@@ -24,7 +24,9 @@ export async function sendChatCompletion(
  */
 export async function getUserModels(group?: string): Promise<ModelOption[]> {
   const res = await api.get(API_ENDPOINTS.USER_MODELS, {
-    params: group && group !== 'auto' ? { group } : undefined,
+    // The server resolves `auto` to the user's selectable auto candidates.
+    // Omitting it would return the union of every selectable group instead.
+    params: group ? { group } : undefined,
   })
   const { data } = res
 
