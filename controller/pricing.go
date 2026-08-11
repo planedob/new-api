@@ -55,12 +55,31 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	usableGroup = service.GetUserUsableGroups(group)
+	if exists {
+		var selectableErr error
+		usableGroup, selectableErr = service.GetUserSelectableTokenGroups(userId.(int))
+		if selectableErr != nil {
+			common.ApiError(c, selectableErr)
+			return
+		}
+	} else {
+		usableGroup = service.GetUserUsableGroups(group)
+	}
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
 	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {
 			delete(groupRatio, group)
+		}
+	}
+
+	autoGroups := service.GetUserAutoGroup(group)
+	if exists {
+		var autoErr error
+		autoGroups, autoErr = service.GetUserSelectableAutoGroups(userId.(int), group)
+		if autoErr != nil {
+			common.ApiError(c, autoErr)
+			return
 		}
 	}
 
@@ -71,7 +90,7 @@ func GetPricing(c *gin.Context) {
 		"group_ratio":        groupRatio,
 		"usable_group":       usableGroup,
 		"supported_endpoint": model.GetSupportedEndpointMap(),
-		"auto_groups":        service.GetUserAutoGroup(group),
+		"auto_groups":        autoGroups,
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }

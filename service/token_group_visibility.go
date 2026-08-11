@@ -59,6 +59,20 @@ func ValidateUserSelectableTokenGroup(userId int, group string) error {
 	if !model.TokenGroupVisibilityEnabled() || group == "" {
 		return nil
 	}
+	if group == "auto" {
+		user, err := model.GetUserById(userId, false)
+		if err != nil {
+			return err
+		}
+		autoGroups, err := GetUserSelectableAutoGroups(userId, user.Group)
+		if err != nil {
+			return err
+		}
+		if len(autoGroups) == 0 {
+			return errors.New("所选令牌分组当前不可用")
+		}
+		return nil
+	}
 	groups, err := GetUserSelectableTokenGroups(userId)
 	if err != nil {
 		return err

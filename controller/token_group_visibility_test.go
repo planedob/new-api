@@ -314,6 +314,34 @@ func TestSelectableAutoGroupsExcludeTargetedGroupsForNonTargets(t *testing.T) {
 	}
 }
 
+func TestValidateSelectableAutoGroupRequiresAtLeastOneVisibleCandidate(t *testing.T) {
+	setupTokenGroupVisibilityTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
+	previousAutoGroups := setting.AutoGroups2JsonString()
+	if err := setting.UpdateAutoGroupsByJsonString(`["vip"]`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := setting.UpdateAutoGroupsByJsonString(previousAutoGroups); err != nil {
+			t.Fatalf("restore auto groups: %v", err)
+		}
+	})
+
+	target := createVisibilityTestUser(t, 1, "alice", "default")
+	nonTarget := createVisibilityTestUser(t, 2, "bob", "default")
+	if err := model.SaveTokenGroupVisibilityPolicy(model.TokenGroupVisibilityPolicy{
+		Group: "vip", Visibility: model.TokenGroupVisibilityTargeted, Usernames: []string{"alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ValidateUserSelectableTokenGroup(target.Id, "auto"); err != nil {
+		t.Fatalf("targeted user auto validation failed: %v", err)
+	}
+	if err := service.ValidateUserSelectableTokenGroup(nonTarget.Id, "auto"); err == nil {
+		t.Fatal("non-target auto validation must fail without a visible candidate")
+	}
+}
+
 func TestVisibilityLookupDoesNotChangeExistingUserOrTokenState(t *testing.T) {
 	setupTokenGroupVisibilityTestDB(t)
 	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")

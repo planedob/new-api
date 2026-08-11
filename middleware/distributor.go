@@ -61,6 +61,10 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if entitlementGrant != nil {
+				if err := service.ValidateUserSelectableTokenGroup(c.GetInt("id"), entitlementGrant.Package.Group); err != nil {
+					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
+					return
+				}
 				common.SetContextKey(c, constant.ContextKeyUsingGroup, entitlementGrant.Package.Group)
 				common.SetContextKey(c, constant.ContextKeyTokenGroup, entitlementGrant.Package.Group)
 				c.Set("entitlement_id", entitlementGrant.TokenGrant.Id)
@@ -134,7 +138,7 @@ func Distribute() func(c *gin.Context) {
 						}
 						userId := c.GetInt("id")
 						if err := service.ValidateUserSelectableTokenGroup(userId, playgroundGroup); err != nil ||
-							(!service.GroupInUserUsableGroups(usingGroup, playgroundGroup) && playgroundGroup != usingGroup) {
+							(playgroundGroup != "auto" && !service.GroupInUserUsableGroups(usingGroup, playgroundGroup) && playgroundGroup != usingGroup) {
 							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 							return
 						}
