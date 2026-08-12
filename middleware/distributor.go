@@ -40,11 +40,57 @@ const (
 	image2TestPinModel     = "gpt-image-2"
 	image2TestPinGroup     = "gpt-image-2-4k"
 	image2TestPinMaxWindow = 2 * time.Hour
+
+	// gptTestRoutePin* is deliberately separate from safe failover. A pin proves
+	// a candidate channel can serve a real client-shaped request; safe failover
+	// proves A -> B. Combining them would silently suppress the retry under test.
+	gptTestRoutePinEnabledEnv   = "GPT_TEST_ROUTE_PIN_ENABLED"
+	gptTestRoutePinTokenIDEnv   = "GPT_TEST_ROUTE_PIN_TOKEN_ID"
+	gptTestRoutePinUntilEnv     = "GPT_TEST_ROUTE_PIN_UNTIL"
+	gptTestRoutePinChannelIDEnv = "GPT_TEST_ROUTE_PIN_CHANNEL_ID"
+
+	gptTestRoutePinUserID    = 26
+	gptTestRoutePinModel     = "gpt-5.5"
+	gptTestRoutePinGroup     = "gpt-failover-iso-20260812"
+	gptTestRoutePinMaxWindow = 2 * time.Hour
 )
 
 type image2TestPinConfig struct {
 	tokenID int
 	until   time.Time
+}
+
+type gptTestRoutePinConfig struct {
+	tokenID   int
+	channelID string
+	until     time.Time
+}
+
+// gptTestRoutePinConfigFromEnv has no defaults. It only enables an internal,
+// slave-loopback test surface for one exact Token and one exact channel.
+func gptTestRoutePinConfigFromEnv(now time.Time) (gptTestRoutePinConfig, bool) {
+	if os.Getenv(gptTestRoutePinEnabledEnv) != "true" {
+		return gptTestRoutePinConfig{}, false
+	}
+	tokenIDValue := strings.TrimSpace(os.Getenv(gptTestRoutePinTokenIDEnv))
+	channelIDValue := strings.TrimSpace(os.Getenv(gptTestRoutePinChannelIDEnv))
+	if !allASCIIDigits(tokenIDValue) || !allASCIIDigits(channelIDValue) {
+		return gptTestRoutePinConfig{}, false
+	}
+	tokenID64, tokenErr := strconv.ParseInt(tokenIDValue, 10, 0)
+	channelID64, channelErr := strconv.ParseInt(channelIDValue, 10, 0)
+	if tokenErr != nil || channelErr != nil || tokenID64 <= 0 || channelID64 <= 0 {
+		return gptTestRoutePinConfig{}, false
+	}
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(os.Getenv(gptTestRoutePinUntilEnv)))
+	if err != nil || until.IsZero() {
+		return gptTestRoutePinConfig{}, false
+	}
+	_, offset := until.Zone()
+	if offset != 8*60*60 || !until.After(now) || until.Sub(now) > gptTestRoutePinMaxWindow {
+		return gptTestRoutePinConfig{}, false
+	}
+	return gptTestRoutePinConfig{tokenID: int(tokenID64), channelID: strconv.FormatInt(channelID64, 10), until: until}, true
 }
 
 // image2TestPinConfigFromEnv deliberately has no defaults. A test pin is
@@ -130,6 +176,37 @@ func maybeSetImage2TestPin(c *gin.Context, modelRequest *ModelRequest, now time.
 	return true
 }
 
+// maybeSetGPTTestRoutePin deliberately runs after auth and resolved group.
+// It accepts neither a client channel header/query/body nor any public/master
+// path. A pinned request must never take part in failover: it is the direct
+// candidate validation half of the test plan.
+func maybeSetGPTTestRoutePin(c *gin.Context, modelRequest *ModelRequest, now time.Time) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil || modelRequest == nil || common.IsMasterNode {
+		return false
+	}
+	if _, alreadyPinned := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); alreadyPinned {
+		return false
+	}
+	if !image2TestPinRemoteIsLoopback(c.Request.RemoteAddr) {
+		return false
+	}
+	if c.Request.Method != http.MethodPost || (c.Request.URL.Path != "/v1/chat/completions" && c.Request.URL.Path != "/v1/responses") {
+		return false
+	}
+	if c.GetInt("id") != gptTestRoutePinUserID || c.GetInt("token_id") <= 0 || modelRequest.Model != gptTestRoutePinModel {
+		return false
+	}
+	if common.GetContextKeyString(c, constant.ContextKeyUsingGroup) != gptTestRoutePinGroup {
+		return false
+	}
+	config, configured := gptTestRoutePinConfigFromEnv(now)
+	if !configured || c.GetInt("token_id") != config.tokenID {
+		return false
+	}
+	common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, config.channelID)
+	return true
+}
+
 func image2TestPinRemoteIsLoopback(remoteAddr string) bool {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
 	if err != nil || port == "" {
@@ -195,6 +272,7 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		maybeSetImage2TestPin(c, modelRequest, time.Now())
+		maybeSetGPTTestRoutePin(c, modelRequest, time.Now())
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
