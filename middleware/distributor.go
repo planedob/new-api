@@ -194,20 +194,22 @@ func maybeSetGPTTestRoutePin(c *gin.Context, modelRequest *ModelRequest, now tim
 	if c == nil || c.Request == nil || c.Request.URL == nil || modelRequest == nil {
 		return false
 	}
+	config, configured := gptTestRoutePinConfigFromEnv(now)
+	if !configured {
+		return false
+	}
 	if _, alreadyPinned := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); alreadyPinned {
 		return false
 	}
 	if c.Request.Method != http.MethodPost || (c.Request.URL.Path != "/v1/chat/completions" && c.Request.URL.Path != "/v1/responses") {
 		return false
 	}
-	if c.GetInt("id") != gptTestRoutePinUserID || c.GetInt("token_id") <= 0 || modelRequest.Model != gptTestRoutePinModel {
-		return false
-	}
-	if common.GetContextKeyString(c, constant.ContextKeyUsingGroup) != gptTestRoutePinGroup {
-		return false
-	}
-	config, configured := gptTestRoutePinConfigFromEnv(now)
-	if !configured || c.GetInt("token_id") != config.tokenID {
+	userMatch := c.GetInt("id") == gptTestRoutePinUserID
+	tokenMatch := c.GetInt("token_id") == config.tokenID
+	modelMatch := modelRequest.Model == gptTestRoutePinModel
+	groupMatch := common.GetContextKeyString(c, constant.ContextKeyUsingGroup) == gptTestRoutePinGroup
+	if !userMatch || !tokenMatch || !modelMatch || !groupMatch {
+		logger.LogInfo(c, fmt.Sprintf("gpt test route pin rejected user_match=%t token_match=%t model_match=%t group_match=%t surface=%s", userMatch, tokenMatch, modelMatch, groupMatch, config.surface))
 		return false
 	}
 	if config.surface == "loopback" && (common.IsMasterNode || !image2TestPinRemoteIsLoopback(c.Request.RemoteAddr)) {
@@ -218,6 +220,7 @@ func maybeSetGPTTestRoutePin(c *gin.Context, modelRequest *ModelRequest, now tim
 	// server-only marker identifies the test pin so relay can fail closed even
 	// when the global SafeFailover feature is disabled.
 	c.Set("gpt_test_route_pin_active", true)
+	logger.LogInfo(c, fmt.Sprintf("gpt test route pin applied channel=%s surface=%s", config.channelID, config.surface))
 	return true
 }
 
