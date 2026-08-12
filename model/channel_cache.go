@@ -18,6 +18,12 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
 
+func ensureChannelCacheGroup(cache map[string]map[string][]int, group string) {
+	if _, ok := cache[group]; !ok {
+		cache[group] = make(map[string][]int)
+	}
+}
+
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
@@ -44,6 +50,11 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
+			// Channel groups and abilities are normally updated together. Keep the
+			// cache builder resilient during an in-flight change or a partially
+			// repaired database: a new channel group must not make a process restart
+			// panic simply because its ability rows are not visible yet.
+			ensureChannelCacheGroup(newGroup2model2channels, group)
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {

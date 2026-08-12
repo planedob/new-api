@@ -369,23 +369,17 @@ func FixAbility() (int, int, error) {
 	}
 	defer fixLock.Unlock()
 
-	// truncate abilities table
-	if common.UsingSQLite {
-		err := DB.Exec("DELETE FROM abilities").Error
-		if err != nil {
-			common.SysLog(fmt.Sprintf("Delete abilities failed: %s", err.Error()))
-			return 0, 0, err
-		}
-	} else {
-		err := DB.Exec("TRUNCATE TABLE abilities").Error
-		if err != nil {
-			common.SysLog(fmt.Sprintf("Truncate abilities failed: %s", err.Error()))
-			return 0, 0, err
-		}
+	// Use DELETE on every supported database. MySQL TRUNCATE requires DROP
+	// privilege, which the runtime account intentionally does not have; using
+	// it here can turn an ability repair into a restart loop.
+	err := DB.Exec("DELETE FROM abilities").Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("Delete abilities failed: %s", err.Error()))
+		return 0, 0, err
 	}
 	var channels []*Channel
 	// Find all channels
-	err := DB.Model(&Channel{}).Find(&channels).Error
+	err = DB.Model(&Channel{}).Find(&channels).Error
 	if err != nil {
 		return 0, 0, err
 	}
