@@ -17,11 +17,12 @@ func gptTestRoutePinNow() time.Time {
 	return time.Date(2026, time.August, 13, 1, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 }
 
-func setGPTTestRoutePinEnv(t *testing.T, enabled, tokenID, channelID string, until time.Time) {
+func setGPTTestRoutePinEnv(t *testing.T, enabled, tokenID, channelID, surface string, until time.Time) {
 	t.Helper()
 	t.Setenv(gptTestRoutePinEnabledEnv, enabled)
 	t.Setenv(gptTestRoutePinTokenIDEnv, tokenID)
 	t.Setenv(gptTestRoutePinChannelIDEnv, channelID)
+	t.Setenv(gptTestRoutePinSurfaceEnv, surface)
 	if until.IsZero() {
 		t.Setenv(gptTestRoutePinUntilEnv, "")
 	} else {
@@ -44,7 +45,7 @@ func newGPTTestRoutePinContext(t *testing.T, path, remoteAddr, body string) *gin
 func TestGPTTestRoutePinFailsClosed(t *testing.T) {
 	now := gptTestRoutePinNow()
 	until := now.Add(time.Hour)
-	setGPTTestRoutePinEnv(t, "true", "730055", "70", until)
+	setGPTTestRoutePinEnv(t, "true", "730055", "70", "loopback", until)
 
 	for _, tc := range []struct {
 		name, path, remote, body, group string
@@ -86,24 +87,60 @@ func TestGPTTestRoutePinFailsClosed(t *testing.T) {
 	}
 }
 
+func TestGPTTestRoutePinMoniSurfacePinsOnlyExactTestIdentity(t *testing.T) {
+	now := gptTestRoutePinNow()
+	setGPTTestRoutePinEnv(t, "true", "730055", "70", "moni", now.Add(time.Hour))
+
+	for _, tc := range []struct {
+		name, remote, group, model string
+		token, user                int
+		master                     bool
+		want                       bool
+	}{
+		{"moni-safari-path-pins-on-master", "203.0.113.9:3100", gptTestRoutePinGroup, "gpt-5.5", 730055, gptTestRoutePinUserID, true, true},
+		{"moni-safari-path-pins-on-slave", "203.0.113.9:3100", gptTestRoutePinGroup, "gpt-5.5", 730055, gptTestRoutePinUserID, false, true},
+		{"wrong-token-does-not-pin", "203.0.113.9:3100", gptTestRoutePinGroup, "gpt-5.5", 730056, gptTestRoutePinUserID, true, false},
+		{"wrong-user-does-not-pin", "203.0.113.9:3100", gptTestRoutePinGroup, "gpt-5.5", 730055, 27, true, false},
+		{"wrong-group-does-not-pin", "203.0.113.9:3100", "gpt满血版 1x", "gpt-5.5", 730055, gptTestRoutePinUserID, true, false},
+		{"wrong-model-does-not-pin", "203.0.113.9:3100", gptTestRoutePinGroup, "gpt-5.4", 730055, gptTestRoutePinUserID, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldMaster := common.IsMasterNode
+			common.IsMasterNode = tc.master
+			t.Cleanup(func() { common.IsMasterNode = oldMaster })
+			ctx := newGPTTestRoutePinContext(t, "/v1/chat/completions", tc.remote, `{"model":"`+tc.model+`"}`)
+			ctx.Set("id", tc.user)
+			ctx.Set("token_id", tc.token)
+			common.SetContextKey(ctx, constant.ContextKeyUsingGroup, tc.group)
+			request, _, err := getModelRequest(ctx)
+			require.NoError(t, err)
+			got := maybeSetGPTTestRoutePin(ctx, request, now)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestGPTTestRoutePinConfigFailsClosed(t *testing.T) {
 	now := gptTestRoutePinNow()
 	for _, tc := range []struct {
-		name, enabled, tokenID, channelID string
-		until                             string
-		want                              bool
+		name, enabled, tokenID, channelID, surface string
+		until                                      string
+		want                                       bool
 	}{
-		{"complete", "true", "730055", "70", now.Add(time.Hour).Format(time.RFC3339), true},
-		{"missing-token", "true", "", "70", now.Add(time.Hour).Format(time.RFC3339), false},
-		{"missing-channel", "true", "730055", "", now.Add(time.Hour).Format(time.RFC3339), false},
-		{"multiple-channel", "true", "730055", "70,73", now.Add(time.Hour).Format(time.RFC3339), false},
-		{"expired", "true", "730055", "70", now.Add(-time.Second).Format(time.RFC3339), false},
-		{"future-too-long", "true", "730055", "70", now.Add(2*time.Hour + time.Second).Format(time.RFC3339), false},
+		{"complete-loopback", "true", "730055", "70", "loopback", now.Add(time.Hour).Format(time.RFC3339), true},
+		{"complete-moni", "true", "730055", "70", "moni", now.Add(time.Hour).Format(time.RFC3339), true},
+		{"missing-token", "true", "", "70", "loopback", now.Add(time.Hour).Format(time.RFC3339), false},
+		{"missing-channel", "true", "730055", "", "loopback", now.Add(time.Hour).Format(time.RFC3339), false},
+		{"multiple-channel", "true", "730055", "70,73", "loopback", now.Add(time.Hour).Format(time.RFC3339), false},
+		{"bad-surface", "true", "730055", "70", "public", now.Add(time.Hour).Format(time.RFC3339), false},
+		{"expired", "true", "730055", "70", "loopback", now.Add(-time.Second).Format(time.RFC3339), false},
+		{"future-too-long", "true", "730055", "70", "loopback", now.Add(2*time.Hour + time.Second).Format(time.RFC3339), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(gptTestRoutePinEnabledEnv, tc.enabled)
 			t.Setenv(gptTestRoutePinTokenIDEnv, tc.tokenID)
 			t.Setenv(gptTestRoutePinChannelIDEnv, tc.channelID)
+			t.Setenv(gptTestRoutePinSurfaceEnv, tc.surface)
 			t.Setenv(gptTestRoutePinUntilEnv, tc.until)
 			_, ok := gptTestRoutePinConfigFromEnv(now)
 			require.Equal(t, tc.want, ok)

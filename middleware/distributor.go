@@ -48,6 +48,7 @@ const (
 	gptTestRoutePinTokenIDEnv   = "GPT_TEST_ROUTE_PIN_TOKEN_ID"
 	gptTestRoutePinUntilEnv     = "GPT_TEST_ROUTE_PIN_UNTIL"
 	gptTestRoutePinChannelIDEnv = "GPT_TEST_ROUTE_PIN_CHANNEL_ID"
+	gptTestRoutePinSurfaceEnv   = "GPT_TEST_ROUTE_PIN_SURFACE"
 
 	gptTestRoutePinUserID    = 26
 	gptTestRoutePinModel     = "gpt-5.5"
@@ -64,10 +65,13 @@ type gptTestRoutePinConfig struct {
 	tokenID   int
 	channelID string
 	until     time.Time
+	surface   string
 }
 
-// gptTestRoutePinConfigFromEnv has no defaults. It only enables an internal,
-// slave-loopback test surface for one exact Token and one exact channel.
+// gptTestRoutePinConfigFromEnv has no defaults. A pin is available only to one
+// exact Token and one exact server-selected channel. "loopback" is for an
+// internal slave probe; "moni" is the deliberately narrow Safari customer-path
+// surface. Neither surface accepts a channel identifier from the client.
 func gptTestRoutePinConfigFromEnv(now time.Time) (gptTestRoutePinConfig, bool) {
 	if os.Getenv(gptTestRoutePinEnabledEnv) != "true" {
 		return gptTestRoutePinConfig{}, false
@@ -90,7 +94,11 @@ func gptTestRoutePinConfigFromEnv(now time.Time) (gptTestRoutePinConfig, bool) {
 	if offset != 8*60*60 || !until.After(now) || until.Sub(now) > gptTestRoutePinMaxWindow {
 		return gptTestRoutePinConfig{}, false
 	}
-	return gptTestRoutePinConfig{tokenID: int(tokenID64), channelID: strconv.FormatInt(channelID64, 10), until: until}, true
+	surface := strings.TrimSpace(os.Getenv(gptTestRoutePinSurfaceEnv))
+	if surface != "loopback" && surface != "moni" {
+		return gptTestRoutePinConfig{}, false
+	}
+	return gptTestRoutePinConfig{tokenID: int(tokenID64), channelID: strconv.FormatInt(channelID64, 10), until: until, surface: surface}, true
 }
 
 // image2TestPinConfigFromEnv deliberately has no defaults. A test pin is
@@ -177,17 +185,16 @@ func maybeSetImage2TestPin(c *gin.Context, modelRequest *ModelRequest, now time.
 }
 
 // maybeSetGPTTestRoutePin deliberately runs after auth and resolved group.
-// It accepts neither a client channel header/query/body nor any public/master
-// path. A pinned request must never take part in failover: it is the direct
-// candidate validation half of the test plan.
+// It accepts neither a client channel header/query/body nor a general public
+// control plane. The optional moni surface remains confined by the exact
+// moni user, short-lived test Token, group, model, endpoint and expiry. A
+// pinned request must never take part in failover: it is the direct candidate
+// validation half of the test plan.
 func maybeSetGPTTestRoutePin(c *gin.Context, modelRequest *ModelRequest, now time.Time) bool {
-	if c == nil || c.Request == nil || c.Request.URL == nil || modelRequest == nil || common.IsMasterNode {
+	if c == nil || c.Request == nil || c.Request.URL == nil || modelRequest == nil {
 		return false
 	}
 	if _, alreadyPinned := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); alreadyPinned {
-		return false
-	}
-	if !image2TestPinRemoteIsLoopback(c.Request.RemoteAddr) {
 		return false
 	}
 	if c.Request.Method != http.MethodPost || (c.Request.URL.Path != "/v1/chat/completions" && c.Request.URL.Path != "/v1/responses") {
@@ -201,6 +208,9 @@ func maybeSetGPTTestRoutePin(c *gin.Context, modelRequest *ModelRequest, now tim
 	}
 	config, configured := gptTestRoutePinConfigFromEnv(now)
 	if !configured || c.GetInt("token_id") != config.tokenID {
+		return false
+	}
+	if config.surface == "loopback" && (common.IsMasterNode || !image2TestPinRemoteIsLoopback(c.Request.RemoteAddr)) {
 		return false
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, config.channelID)
