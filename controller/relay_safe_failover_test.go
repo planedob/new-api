@@ -167,3 +167,34 @@ func TestShouldRetryLegacyModePreservesChannelErrorBehavior(t *testing.T) {
 
 	require.True(t, shouldRetry(c, info, channelErr, 0, time.Second))
 }
+
+func TestShouldRetryGPTTestRoutePinNeverRetriesLegacyChannelError(t *testing.T) {
+	setupSafeFailoverTest(t)
+	common.SafeFailoverV1Enabled = false
+	c := safeFailoverContext()
+	c.Set("specific_channel_id", "70")
+	c.Set("gpt_test_route_pin_active", true)
+	info := &relaycommon.RelayInfo{}
+	channelErr := types.NewErrorWithStatusCode(
+		errors.New("channel has no available key"),
+		types.ErrorCodeChannelNoAvailableKey,
+		http.StatusInternalServerError,
+	)
+
+	require.False(t, shouldRetry(c, info, channelErr, 10, time.Second))
+}
+
+func TestShouldRetryGPTTestRoutePinNeverRetriesSafeFailover(t *testing.T) {
+	setupSafeFailoverTest(t)
+	c := safeFailoverContext()
+	c.Set("specific_channel_id", "70")
+	c.Set("gpt_test_route_pin_active", true)
+	info := &relaycommon.RelayInfo{}
+	upstreamErr := types.NewErrorWithStatusCode(
+		errors.New("upstream temporarily unavailable"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusServiceUnavailable,
+	)
+
+	require.False(t, shouldRetry(c, info, upstreamErr, 10, time.Second))
+}

@@ -214,6 +214,10 @@ func maybeSetGPTTestRoutePin(c *gin.Context, modelRequest *ModelRequest, now tim
 		return false
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, config.channelID)
+	// Preserve legacy retry behavior for ordinary user-selected channels. This
+	// server-only marker identifies the test pin so relay can fail closed even
+	// when the global SafeFailover feature is disabled.
+	c.Set("gpt_test_route_pin_active", true)
 	return true
 }
 

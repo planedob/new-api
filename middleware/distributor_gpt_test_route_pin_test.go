@@ -80,8 +80,10 @@ func TestGPTTestRoutePinFailsClosed(t *testing.T) {
 			if tc.want {
 				require.True(t, exists)
 				require.Equal(t, "70", channelID)
+				require.True(t, ctx.GetBool("gpt_test_route_pin_active"))
 			} else {
 				require.False(t, exists)
+				require.False(t, ctx.GetBool("gpt_test_route_pin_active"))
 			}
 		})
 	}

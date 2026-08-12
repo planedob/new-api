@@ -414,6 +414,13 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 	if openaiErr == nil {
 		return false
 	}
+	// A route-pin is direct-channel acceptance evidence, not a failover test.
+	// The marker is created only by middleware after the exact server-side
+	// moni Token/group/model/expiry gate succeeds; it is never client input.
+	// Keep it ahead of legacy channel-error retries.
+	if c.GetBool("gpt_test_route_pin_active") {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
