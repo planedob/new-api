@@ -145,12 +145,16 @@ func image2TestPinRemoteIsLoopback(remoteAddr string) bool {
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		setRelayErrorStage(c, "distribution")
 		var channel *model.Channel
 		var entitlementGrant *model.EntitlementGrant
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
+		}
+		if modelRequest.Model != "" {
+			c.Set("original_model", modelRequest.Model)
 		}
 		if modelRequest.Model != "" && c.GetInt("token_id") > 0 {
 			entitlementGrant, _, err = model.ResolveTokenEntitlement(

@@ -195,6 +195,7 @@ func TokenConcurrencyGateWithRedis(rdb *redis.Client) gin.HandlerFunc {
 
 func tokenConcurrencyGate(redisClient func() *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		setRelayErrorStage(c, "token_concurrency")
 		group := tokenConcurrencyGroup(c)
 		policy := setting.TokenConcurrencyPolicyForGroup(group)
 		if !policy.Configured {

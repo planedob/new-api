@@ -51,6 +51,7 @@ const (
 	ErrorCodeGetChannelFailed              ErrorCode = "get_channel_failed"
 	ErrorCodeUnsupportedImageConfiguration ErrorCode = "unsupported_image_configuration"
 	ErrorCodeGenRelayInfoFailed            ErrorCode = "gen_relay_info_failed"
+	ErrorCodeUnhandledRelayFailure         ErrorCode = "unhandled_relay_failure"
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"

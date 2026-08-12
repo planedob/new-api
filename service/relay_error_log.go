@@ -11,6 +11,7 @@ import (
 )
 
 const relayErrorLogRecordedKey = "relay_error_log_recorded_error"
+const relayErrorLogRecordedAnyKey = "relay_error_log_recorded_any"
 
 // RelayErrorLogOptions describes where a relay request failed. Channel is nil
 // when the request never reached an upstream; such failures are still useful
@@ -98,7 +99,18 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		other,
 	)
 	c.Set(relayErrorLogRecordedKey, err)
+	c.Set(relayErrorLogRecordedAnyKey, true)
 	return true
+}
+
+// HasRelayErrorLog reports whether any structured error event has already
+// been recorded for this request. It lets the response audit middleware fill
+// genuine gaps without duplicating errors emitted by a richer code path.
+func HasRelayErrorLog(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return c.GetBool(relayErrorLogRecordedAnyKey)
 }
 
 // WasRelayErrorLogged prevents the final response path from duplicating the
