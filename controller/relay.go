@@ -73,8 +73,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
-		newAPIError *types.NewAPIError
-		ws          *websocket.Conn
+		newAPIError     *types.NewAPIError
+		ws              *websocket.Conn
+		relayErrorStage = "request_validation"
+		relayErrorExtra map[string]interface{}
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
@@ -90,6 +92,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+			if !service.WasRelayErrorLogged(c, newAPIError) {
+				service.RecordRelayErrorLog(c, newAPIError, service.RelayErrorLogOptions{
+					Stage: relayErrorStage,
+					Extra: relayErrorExtra,
+				})
+			}
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
@@ -118,12 +126,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	relayErrorStage = "relay_info"
 	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
 
+	relayErrorStage = "image2_capability_validation"
 	var image2Router *service.Image2SmartRouter
 	if imageRequest, ok := request.(*dto.ImageRequest); ok {
 		if image2RequestErr := image2SmartRequestValidationError(relayInfo, imageRequest); image2RequestErr != nil {
@@ -146,6 +156,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
+	relayErrorStage = "content_validation"
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
@@ -165,6 +176,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
+	relayErrorStage = "token_estimation"
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeCountTokenFailed)
@@ -173,6 +185,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayInfo.SetEstimatePromptTokens(tokens)
 
+	relayErrorStage = "pricing"
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
@@ -184,6 +197,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
 	} else {
+		relayErrorStage = "pre_consume"
 		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 		if newAPIError != nil {
 			return
@@ -222,8 +236,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; safeFailoverActive || retryParam.GetRetry() <= maxRetries; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		relayErrorStage = "channel_selection"
+		relayErrorExtra = nil
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
+			if retryParam.Image2Router != nil {
+				relayErrorExtra = map[string]interface{}{
+					"image2_request_capability":  retryParam.Image2Router.RequestSummary(),
+					"image2_candidate_decisions": retryParam.Image2Router.DecisionSummary(),
+				}
+			}
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
 			break
@@ -242,6 +264,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if safeFailoverActive {
 			retryParam.ExcludeChannel(channel.Id)
 		}
+		relayErrorStage = "request_body"
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -255,6 +278,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		c.Request.Body = io.NopCloser(bodyStorage)
 
 		attemptStartedAt := time.Now()
+		relayErrorStage = "upstream"
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
 			newAPIError = relay.WssHelper(c, relayInfo)
@@ -501,40 +525,10 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		})
 	}
 
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
-		// 保存错误日志到mysql中
-		userId := c.GetInt("id")
-		tokenName := c.GetString("token_name")
-		modelName := c.GetString("original_model")
-		tokenId := c.GetInt("token_id")
-		userGroup := c.GetString("group")
-		channelId := c.GetInt("channel_id")
-		other := make(map[string]interface{})
-		if c.Request != nil && c.Request.URL != nil {
-			other["request_path"] = c.Request.URL.Path
-		}
-		other["error_type"] = err.GetErrorType()
-		other["error_code"] = err.GetErrorCode()
-		other["status_code"] = err.StatusCode
-		other["channel_id"] = channelId
-		other["channel_name"] = c.GetString("channel_name")
-		other["channel_type"] = c.GetInt("channel_type")
-		adminInfo := make(map[string]interface{})
-		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
-		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
-		if isMultiKey {
-			adminInfo["is_multi_key"] = true
-			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-		}
-		service.AppendChannelAffinityAdminInfo(c, adminInfo)
-		other["admin_info"] = adminInfo
-		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-		if startTime.IsZero() {
-			startTime = time.Now()
-		}
-		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
-	}
+	service.RecordRelayErrorLog(c, err, service.RelayErrorLogOptions{
+		Stage:   "upstream",
+		Channel: &channelError,
+	})
 
 }
 
@@ -667,6 +661,12 @@ func RelayTask(c *gin.Context) {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
+				service.RecordRelayErrorLog(c, channelErr, service.RelayErrorLogOptions{
+					Stage: "channel_selection",
+					Extra: map[string]interface{}{
+						"relay_kind": "task",
+					},
+				})
 				taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", http.StatusInternalServerError)
 				break
 			}
