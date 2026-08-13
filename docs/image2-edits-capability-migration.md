@@ -16,6 +16,9 @@ treated as B-layer smart-router capability proof:
 | `#32` | historical legacy/fallback edits successes exist; UHD generation evidence exists | `generations`, `resolutions=[uhd]`, `qualities=[]`, `edits_accepted=false` | `CONFLICT / NEEDS_INFO`: require a fresh direct fixed-channel run |
 | `#23` | no current direct fixed-channel edits proof | generation-only history | `NEEDS_INFO` |
 | `#47` | generation explicit `high` + UHD evidence | generation-only, explicit `high` | edits `NEEDS_INFO`; generation high does not imply edits |
+| `#43` | no direct fixed-channel edits proof in the inspected evidence | capability shape not verified here | `NEEDS_INFO` |
+| `#71` | no direct fixed-channel edits proof in the inspected evidence | capability shape not verified here | `NEEDS_INFO` |
+| `#63` | no direct fixed-channel edits proof in the inspected evidence | capability shape not verified here | `NEEDS_INFO` |
 
 No row is automatically promoted to `operations=["edits"]`. Historical
 traffic, model names, and a fallback chain are deliberately insufficient.
