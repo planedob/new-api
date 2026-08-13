@@ -66,6 +66,27 @@ func TestImage2ChannelCapabilityValidate(t *testing.T) {
 			wantError: "cannot contain an empty value",
 		},
 		{
+			name: "auto quality declaration rejected",
+			capability: &Image2ChannelCapability{
+				Enabled: true, Operations: []string{"generations"}, Resolutions: []string{"1024"}, Qualities: []string{"auto"},
+			},
+			wantError: "cannot contain auto",
+		},
+		{
+			name: "quality duplicates rejected case insensitively",
+			capability: &Image2ChannelCapability{
+				Enabled: true, Operations: []string{"generations"}, Resolutions: []string{"1024"}, Qualities: []string{"standard", "STANDARD"},
+			},
+			wantError: "duplicate value",
+		},
+		{
+			name: "unknown quality rejected",
+			capability: &Image2ChannelCapability{
+				Enabled: true, Operations: []string{"generations"}, Resolutions: []string{"1024"}, Qualities: []string{"ultra"},
+			},
+			wantError: "unsupported value",
+		},
+		{
 			name: "edits operation requires explicit acceptance",
 			capability: &Image2ChannelCapability{
 				Enabled: true, Operations: []string{"edits"}, Resolutions: []string{"1024"}, EditsAccepted: false,

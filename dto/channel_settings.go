@@ -22,9 +22,12 @@ type ChannelSettings struct {
 // safely accept. RoutePriority is only compared among compatible candidates;
 // it is not a price, channel priority, or weight.
 type Image2ChannelCapability struct {
-	Enabled       bool     `json:"enabled,omitempty"`
-	Operations    []string `json:"operations,omitempty"`  // generations, edits
-	Resolutions   []string `json:"resolutions,omitempty"` // 1024, 2048, uhd
+	Enabled     bool     `json:"enabled,omitempty"`
+	Operations  []string `json:"operations,omitempty"`  // generations, edits
+	Resolutions []string `json:"resolutions,omitempty"` // 1024, 2048, uhd
+	// Qualities is the explicit quality allow-list. An empty list means that
+	// only the provider default (request quality omitted or "auto") is proven;
+	// it is never a wildcard for unverified explicit qualities.
 	Qualities     []string `json:"qualities,omitempty"`
 	MaxN          uint     `json:"max_n,omitempty"` // zero means no declared limit
 	RoutePriority int      `json:"route_priority,omitempty"`
@@ -64,10 +67,30 @@ func (capability *Image2ChannelCapability) Validate() error {
 			}
 		}
 	}
-	for _, quality := range capability.Qualities {
-		if strings.TrimSpace(quality) == "" {
+	return validateImage2QualityValues(capability.Qualities)
+}
+
+func validateImage2QualityValues(values []string) error {
+	allowed := map[string]struct{}{
+		"standard": {},
+		"high":     {},
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, quality := range values {
+		normalized := strings.ToLower(strings.TrimSpace(quality))
+		if normalized == "" {
 			return fmt.Errorf("image2_capability.qualities cannot contain an empty value")
 		}
+		if normalized == "auto" {
+			return fmt.Errorf("image2_capability.qualities cannot contain auto; omit qualities to use the provider default")
+		}
+		if _, ok := allowed[normalized]; !ok {
+			return fmt.Errorf("image2_capability.qualities contains unsupported value %q", quality)
+		}
+		if _, duplicate := seen[normalized]; duplicate {
+			return fmt.Errorf("image2_capability.qualities contains duplicate value %q", quality)
+		}
+		seen[normalized] = struct{}{}
 	}
 	return nil
 }

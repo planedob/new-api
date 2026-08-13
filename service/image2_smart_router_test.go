@@ -73,7 +73,7 @@ func TestImage2SmartRouterSpecificChannelKeepsPinnedLegacyPath(t *testing.T) {
 func TestImage2SmartRouterResolutionAndEditFiltering(t *testing.T) {
 	web := image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)
 	codex := image2TestChannel(2, 20, []string{"generations", "edits"}, []string{"1024", "2048"}, true)
-	adobe := image2TestChannel(3, 30, []string{"generations", "edits"}, []string{"1024", "2048", "uhd"}, false)
+	adobe := image2TestChannel(3, 30, []string{"generations"}, []string{"1024", "2048", "uhd"}, false)
 
 	for _, test := range []struct {
 		name, resolution, operation string
@@ -131,7 +131,7 @@ func TestImage2SmartRouterIncompatibleCandidatesAreNeverCalled(t *testing.T) {
 		Image2RequestCapability{Operation: "edits", Resolution: "2048", Quality: "high", N: 2},
 		[]*model.Channel{
 			image2TestChannel(1, 10, []string{"generations"}, []string{"2048"}, false),
-			image2TestChannel(2, 20, []string{"edits"}, []string{"2048"}, true),
+			image2ProfileChannel(2, "compatible-edits", 20, []string{"edits"}, []string{"2048"}, []string{"high"}, 0, true),
 		},
 	)
 	selected, routeErr := router.Next()
@@ -258,6 +258,22 @@ func TestImage2SmartRouterMalformedOnlyCapabilityDoesNotFallBackToLegacy(t *test
 	require.True(t, types.IsSkipRetryError(err), "an invalid sole capability must fail closed")
 }
 
+func TestImage2SmartRouterInvalidQualityDeclarationFailsClosed(t *testing.T) {
+	channel := image2TestChannel(44, 10, []string{"generations", "edits"}, []string{"1024"}, true)
+	setting := channel.GetSetting()
+	setting.Image2Capability.Qualities = []string{"auto"}
+	channel.SetSetting(setting)
+
+	router, configured := newImage2SmartRouterIfConfigured(
+		Image2RequestCapability{Operation: "edits", Resolution: "1024", Quality: "auto", N: 1},
+		[]*model.Channel{channel},
+	)
+	require.True(t, configured)
+	require.NotNil(t, router)
+	require.Equal(t, 0, router.CandidateCount())
+	require.Contains(t, router.DecisionSummary(), "44:image2_capability_invalid")
+}
+
 func TestImage2SmartRouterFallsBackOnlyWhenAllCapabilitiesAreMissing(t *testing.T) {
 	unconfigured := []*model.Channel{nil, {Id: 1}, {Id: 2}}
 	request := Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1}
@@ -311,6 +327,33 @@ func TestImage2SmartRouterQualityFiltering(t *testing.T) {
 		require.True(t, types.IsSkipRetryError(err))
 		require.Contains(t, router.DecisionSummary(), "1:quality_unsupported")
 	})
+}
+
+func TestImage2SmartRouterEmptyQualitiesFailClosedForExplicitQuality(t *testing.T) {
+	channel := image2TestChannel(44, 10, []string{"generations", "edits"}, []string{"1024", "2048"}, true)
+	for _, quality := range []string{"standard", "high"} {
+		t.Run(quality, func(t *testing.T) {
+			router := newImage2SmartRouter(Image2RequestCapability{
+				Operation: "edits", Resolution: "1024", Quality: quality, N: 1,
+			}, []*model.Channel{channel})
+			require.Equal(t, 0, router.CandidateCount())
+			require.Contains(t, router.DecisionSummary(), "44:quality_unverified")
+			_, err := router.Next()
+			require.Error(t, err)
+			require.True(t, types.IsSkipRetryError(err))
+		})
+	}
+
+	for _, quality := range []string{"", "auto"} {
+		t.Run("default-"+quality, func(t *testing.T) {
+			router := newImage2SmartRouter(Image2RequestCapability{
+				Operation: "edits", Resolution: "1024", Quality: quality, N: 1,
+			}, []*model.Channel{channel})
+			selected, err := router.Next()
+			require.Nil(t, err)
+			require.Equal(t, channel.Id, selected.Id)
+		})
+	}
 }
 
 func TestImage2SmartRouterQuantityFiltering(t *testing.T) {

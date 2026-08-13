@@ -128,18 +128,22 @@ func TestImage2PlaygroundRejectsAPIKeyBeforeRelay(t *testing.T) {
 	// validates a user access token (not a tokens table key). The legacy auth
 	// envelope is HTTP 200 with success=false, so status alone must not be
 	// treated as success.
-	recorder := image2RouteContractRequest(t, router, "/pg/images/generations", "sk-"+token.Key)
-	require.Equal(t, http.StatusOK, recorder.Code)
-	var body struct {
-		Success *bool  `json:"success"`
-		Message string `json:"message"`
-		Data    any    `json:"data"`
+	for _, path := range []string{"/pg/images/generations", "/pg/images/edits"} {
+		t.Run(path, func(t *testing.T) {
+			recorder := image2RouteContractRequest(t, router, path, "sk-"+token.Key)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var body struct {
+				Success *bool  `json:"success"`
+				Message string `json:"message"`
+				Data    any    `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body), recorder.Body.String())
+			require.NotNil(t, body.Success, recorder.Body.String())
+			require.False(t, *body.Success, recorder.Body.String())
+			require.NotEmpty(t, body.Message, recorder.Body.String())
+			require.Nil(t, body.Data, recorder.Body.String())
+		})
 	}
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body), recorder.Body.String())
-	require.NotNil(t, body.Success, recorder.Body.String())
-	require.False(t, *body.Success, recorder.Body.String())
-	require.NotEmpty(t, body.Message, recorder.Body.String())
-	require.Nil(t, body.Data, recorder.Body.String())
 }
 
 func TestImage2V1APIKeyPassesTokenAuthContract(t *testing.T) {
@@ -148,13 +152,16 @@ func TestImage2V1APIKeyPassesTokenAuthContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	relayReached := false
-	router.POST("/v1/images/generations", middleware.TokenAuth(), func(c *gin.Context) {
-		relayReached = true
-		c.JSON(http.StatusOK, gin.H{"relay_reached": true})
-	})
+	for _, path := range []string{"/v1/images/generations", "/v1/images/edits"} {
+		router.POST(path, middleware.TokenAuth(), func(c *gin.Context) {
+			relayReached = true
+			c.JSON(http.StatusOK, gin.H{"relay_reached": true})
+		})
 
-	recorder := image2RouteContractRequest(t, router, "/v1/images/generations", "sk-"+token.Key)
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.True(t, relayReached, recorder.Body.String())
-	require.JSONEq(t, `{"relay_reached":true}`, recorder.Body.String())
+		recorder := image2RouteContractRequest(t, router, path, "sk-"+token.Key)
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		require.True(t, relayReached, recorder.Body.String())
+		require.JSONEq(t, `{"relay_reached":true}`, recorder.Body.String())
+		relayReached = false
+	}
 }

@@ -197,6 +197,16 @@ func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Chann
 			continue
 		}
 		capability := setting.Image2Capability
+		if capability != nil {
+			if err := capability.Validate(); err != nil {
+				// A malformed opt-in is a configured-but-invalid capability. Do not
+				// let it silently fall back to the legacy selector or guess a
+				// provider operation from the model name.
+				configured = true
+				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_invalid"})
+				continue
+			}
+		}
 		if capability != nil && capability.Enabled {
 			configured = true
 		}
@@ -310,10 +320,16 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 	if !containsFold(capability.Resolutions, req.Resolution) {
 		return "resolution_unsupported"
 	}
-	// An omitted quality means "use the provider default". Only reject a
-	// channel when the client explicitly requests a quality it cannot serve.
-	if req.Quality != "" && len(capability.Qualities) > 0 && !containsFold(capability.Qualities, req.Quality) {
-		return "quality_unsupported"
+	// Omitted/auto quality means "use the provider default". Every other
+	// explicit quality must be declared so an empty list cannot silently act as
+	// a wildcard for unverified upstream capabilities.
+	if req.Quality != "" && !strings.EqualFold(strings.TrimSpace(req.Quality), "auto") {
+		if len(capability.Qualities) == 0 {
+			return "quality_unverified"
+		}
+		if !containsFold(capability.Qualities, req.Quality) {
+			return "quality_unsupported"
+		}
 	}
 	if capability.MaxN > 0 && req.N > capability.MaxN {
 		return "n_exceeds_limit"
