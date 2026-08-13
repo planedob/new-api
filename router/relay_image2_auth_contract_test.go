@@ -120,14 +120,15 @@ func image2RouteContractRequest(t *testing.T, router *gin.Engine, path string, k
 }
 
 func TestImage2PlaygroundRejectsAPIKeyBeforeRelay(t *testing.T) {
-	setupImage2RouteContractDB(t)
+	_, token := setupImage2RouteContractDB(t)
 	router := newImage2PlaygroundContractRouter()
 
-	// The production probe used an API token on /pg. /pg is a dashboard
-	// playground route and is protected by UserAuth, which validates a user
-	// access token (not a tokens table key). The legacy auth envelope is HTTP
-	// 200 with success=false, so status alone must not be treated as success.
-	recorder := image2RouteContractRequest(t, router, "/pg/images/generations", "sk-image2-route-contract-token")
+	// The production probe used a valid API token from the tokens table on /pg.
+	// /pg is a dashboard playground route and is protected by UserAuth, which
+	// validates a user access token (not a tokens table key). The legacy auth
+	// envelope is HTTP 200 with success=false, so status alone must not be
+	// treated as success.
+	recorder := image2RouteContractRequest(t, router, "/pg/images/generations", "sk-"+token.Key)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var body struct {
 		Success *bool  `json:"success"`
