@@ -35,6 +35,11 @@ SENSITIVE_KEYS = {
     "private_key",
     "cookie",
     "session",
+    "credential",
+    "credentials",
+    "auth",
+    "headers",
+    "http_headers",
     "connection_string",
     "dsn",
 }

@@ -179,6 +179,12 @@ class Image2CapabilityMigrationTests(unittest.TestCase):
         with self.assertRaises(MigrationError):
             build_plan(snapshot, [])
 
+    def test_credential_container_is_rejected_before_planning(self):
+        snapshot = {"channels": [_channel(44)]}
+        snapshot["channels"][0]["credentials"] = {"provider": "redacted"}
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, [])
+
     def test_cli_round_trip_is_utf8_json_without_writes_to_snapshot(self):
         # Keep a tiny filesystem assertion so the CLI's write path is covered
         # without ever touching a production object or network endpoint.
