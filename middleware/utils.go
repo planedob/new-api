@@ -57,7 +57,7 @@ func abortWithOpenAiMessageAndRecord(c *gin.Context, statusCode int, message str
 		},
 	})
 	c.Abort()
-	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))
+	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, service.SanitizeRelayErrorLogText(message)))
 }
 
 // abortWithOpenAiMessageAndRecordSelection is reserved for model/group
@@ -115,5 +115,5 @@ func abortWithMidjourneyMessage(c *gin.Context, statusCode int, code int, descri
 		"code":        code,
 	})
 	c.Abort()
-	logger.LogError(c.Request.Context(), description)
+	logger.LogError(c.Request.Context(), service.SanitizeRelayErrorLogText(description))
 }

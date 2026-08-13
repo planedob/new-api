@@ -124,8 +124,17 @@ func TestRecordRelayErrorLogSanitizesSensitiveContentAndExtra(t *testing.T) {
 	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
 	otherText := common.MapToJsonStr(other)
 	require.NotContains(t, otherText, secret)
+	require.NotContains(t, otherText, "nested-map-password-NO-SK")
+	require.Contains(t, otherText, `"password":"***"`)
 	require.NotContains(t, otherText, "\n")
 	require.NotContains(t, otherText, "\r")
+}
+
+func TestSanitizeRelayErrorLogTextMasksAuthorizationBearerAsOneCredential(t *testing.T) {
+	secret := "sk-authorization-sentinel"
+	result := SanitizeRelayErrorLogText("Authorization: Bearer " + secret)
+	require.NotContains(t, result, secret)
+	require.Equal(t, "Authorization: ***", result)
 }
 
 func TestSanitizeRelayErrorLogTextTruncatesLongUntrustedInput(t *testing.T) {

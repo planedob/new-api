@@ -19,7 +19,7 @@ const maxRelayErrorLogTextLength = 4096
 
 var (
 	relayErrorLogBearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
-	relayErrorLogAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*:\s*[^\s,;]+`)
+	relayErrorLogAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*:\s*(?:bearer\s+)?[^\s,;]+`)
 	relayErrorLogAPIKeyPattern        = regexp.MustCompile(`(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+`)
 	relayErrorLogSKPattern            = regexp.MustCompile(`\bsk-[A-Za-z0-9][A-Za-z0-9._-]*`)
 )
@@ -34,9 +34,9 @@ func SanitizeRelayErrorLogText(text string) string {
 		}
 		return r
 	}, text)
-	text = common.MaskSensitiveInfo(text)
 	text = relayErrorLogAuthorizationPattern.ReplaceAllString(text, "Authorization: ***")
 	text = relayErrorLogBearerPattern.ReplaceAllString(text, "Bearer ***")
+	text = common.MaskSensitiveInfo(text)
 	text = relayErrorLogAPIKeyPattern.ReplaceAllStringFunc(text, func(match string) string {
 		key := strings.SplitN(match, ":", 2)[0]
 		if strings.Contains(match, "=") && !strings.Contains(match, ":") {
@@ -49,6 +49,15 @@ func SanitizeRelayErrorLogText(text string) string {
 		return text[:maxRelayErrorLogTextLength] + "...[truncated]"
 	}
 	return text
+}
+
+func isSensitiveRelayErrorLogField(key string) bool {
+	normalized := strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(strings.ToLower(key))
+	return strings.Contains(normalized, "authorization") ||
+		strings.Contains(normalized, "apikey") ||
+		strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "password")
 }
 
 func sanitizeRelayErrorLogValue(value interface{}) interface{} {
@@ -64,6 +73,10 @@ func sanitizeRelayErrorLogValue(value interface{}) interface{} {
 	case map[string]string:
 		result := make(map[string]string, len(typed))
 		for key, item := range typed {
+			if isSensitiveRelayErrorLogField(key) {
+				result[key] = "***"
+				continue
+			}
 			result[key] = SanitizeRelayErrorLogText(item)
 		}
 		return result
@@ -83,6 +96,10 @@ func sanitizeRelayErrorLogValue(value interface{}) interface{} {
 func sanitizeRelayErrorLogFields(fields map[string]interface{}) map[string]interface{} {
 	result := make(map[string]interface{}, len(fields))
 	for key, value := range fields {
+		if isSensitiveRelayErrorLogField(key) {
+			result[key] = "***"
+			continue
+		}
 		result[key] = sanitizeRelayErrorLogValue(value)
 	}
 	return result
