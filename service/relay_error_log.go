@@ -1,6 +1,8 @@
 package service
 
 import (
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,6 +14,73 @@ import (
 
 const relayErrorLogRecordedKey = "relay_error_log_recorded_error"
 const relayErrorLogRecordedAnyKey = "relay_error_log_recorded_any"
+
+const maxRelayErrorLogTextLength = 4096
+
+var (
+	relayErrorLogBearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
+	relayErrorLogAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*:\s*[^\s,;]+`)
+	relayErrorLogAPIKeyPattern        = regexp.MustCompile(`(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+`)
+	relayErrorLogSKPattern            = regexp.MustCompile(`\bsk-[A-Za-z0-9][A-Za-z0-9._-]*`)
+)
+
+// sanitizeRelayErrorLogText is intentionally applied immediately before an
+// error reaches persistent storage or the error-log logger. Upstream errors
+// are untrusted input: they can include credentials and control characters.
+func sanitizeRelayErrorLogText(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, text)
+	text = common.MaskSensitiveInfo(text)
+	text = relayErrorLogAuthorizationPattern.ReplaceAllString(text, "Authorization: ***")
+	text = relayErrorLogBearerPattern.ReplaceAllString(text, "Bearer ***")
+	text = relayErrorLogAPIKeyPattern.ReplaceAllStringFunc(text, func(match string) string {
+		key := strings.SplitN(match, ":", 2)[0]
+		if strings.Contains(match, "=") && !strings.Contains(match, ":") {
+			key = strings.SplitN(match, "=", 2)[0]
+		}
+		return key + ":***"
+	})
+	text = relayErrorLogSKPattern.ReplaceAllString(text, "sk-***")
+	if len(text) > maxRelayErrorLogTextLength {
+		return text[:maxRelayErrorLogTextLength] + "...[truncated]"
+	}
+	return text
+}
+
+func sanitizeRelayErrorLogValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case string:
+		return sanitizeRelayErrorLogText(typed)
+	case []string:
+		result := make([]string, len(typed))
+		for i, item := range typed {
+			result[i] = sanitizeRelayErrorLogText(item)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for i, item := range typed {
+			result[i] = sanitizeRelayErrorLogValue(item)
+		}
+		return result
+	case map[string]interface{}:
+		return sanitizeRelayErrorLogFields(typed)
+	default:
+		return value
+	}
+}
+
+func sanitizeRelayErrorLogFields(fields map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(fields))
+	for key, value := range fields {
+		result[key] = sanitizeRelayErrorLogValue(value)
+	}
+	return result
+}
 
 // RelayErrorLogOptions describes where a relay request failed. Channel is nil
 // when the request never reached an upstream; such failures are still useful
@@ -67,7 +136,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	other["channel_name"] = channelName
 	other["channel_type"] = channelType
 	for key, value := range options.Extra {
-		other[key] = value
+		other[key] = sanitizeRelayErrorLogValue(value)
 	}
 
 	adminInfo := map[string]interface{}{
@@ -78,7 +147,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
 	AppendChannelAffinityAdminInfo(c, adminInfo)
-	other["admin_info"] = adminInfo
+	other["admin_info"] = sanitizeRelayErrorLogValue(adminInfo)
 
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {
@@ -91,7 +160,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		channelID,
 		modelName,
 		tokenName,
-		err.MaskSensitiveErrorWithStatusCode(),
+		sanitizeRelayErrorLogText(err.MaskSensitiveErrorWithStatusCode()),
 		tokenID,
 		useTimeSeconds,
 		common.GetContextKeyBool(c, constant.ContextKeyIsStream),
