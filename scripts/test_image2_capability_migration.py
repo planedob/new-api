@@ -250,6 +250,15 @@ class Image2CapabilityMigrationTests(unittest.TestCase):
                 with self.assertRaises(MigrationError):
                     validate_plan(snapshot, tampered)
 
+    def test_validate_plan_rejects_unknown_needs_info_channel_even_with_recomputed_digest(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        tampered = copy.deepcopy(plan)
+        tampered["needs_info"] = [{"channel_id": 999, "reasons": ["forged"]}]
+        tampered["plan_sha256"] = _digest_for_plan(tampered)
+        with self.assertRaises(MigrationError):
+            validate_plan(snapshot, tampered)
+
     def test_validate_plan_rejects_capability_digest_tampering(self):
         snapshot = {"channels": [_channel(44)]}
         plan = build_plan(snapshot, [_proof(44)])
