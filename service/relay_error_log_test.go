@@ -106,6 +106,9 @@ func TestRecordRelayErrorLogSanitizesSensitiveContentAndExtra(t *testing.T) {
 		Stage: "channel_selection",
 		Extra: map[string]interface{}{
 			"upstream_detail": "token=" + secret + "\r\nnext",
+			"nested": map[string]string{
+				"password": secret + "\x1b",
+			},
 		},
 	}))
 
@@ -126,7 +129,7 @@ func TestRecordRelayErrorLogSanitizesSensitiveContentAndExtra(t *testing.T) {
 }
 
 func TestSanitizeRelayErrorLogTextTruncatesLongUntrustedInput(t *testing.T) {
-	result := sanitizeRelayErrorLogText(strings.Repeat("x", maxRelayErrorLogTextLength+1))
+	result := SanitizeRelayErrorLogText(strings.Repeat("x", maxRelayErrorLogTextLength+1))
 	require.Equal(t, maxRelayErrorLogTextLength+len("...[truncated]"), len(result))
 	require.True(t, strings.HasSuffix(result, "...[truncated]"))
 }

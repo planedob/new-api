@@ -24,10 +24,10 @@ var (
 	relayErrorLogSKPattern            = regexp.MustCompile(`\bsk-[A-Za-z0-9][A-Za-z0-9._-]*`)
 )
 
-// sanitizeRelayErrorLogText is intentionally applied immediately before an
+// SanitizeRelayErrorLogText is intentionally applied immediately before an
 // error reaches persistent storage or the error-log logger. Upstream errors
 // are untrusted input: they can include credentials and control characters.
-func sanitizeRelayErrorLogText(text string) string {
+func SanitizeRelayErrorLogText(text string) string {
 	text = strings.Map(func(r rune) rune {
 		if r < 0x20 || r == 0x7f {
 			return ' '
@@ -54,11 +54,17 @@ func sanitizeRelayErrorLogText(text string) string {
 func sanitizeRelayErrorLogValue(value interface{}) interface{} {
 	switch typed := value.(type) {
 	case string:
-		return sanitizeRelayErrorLogText(typed)
+		return SanitizeRelayErrorLogText(typed)
 	case []string:
 		result := make([]string, len(typed))
 		for i, item := range typed {
-			result[i] = sanitizeRelayErrorLogText(item)
+			result[i] = SanitizeRelayErrorLogText(item)
+		}
+		return result
+	case map[string]string:
+		result := make(map[string]string, len(typed))
+		for key, item := range typed {
+			result[key] = SanitizeRelayErrorLogText(item)
 		}
 		return result
 	case []interface{}:
@@ -160,7 +166,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		channelID,
 		modelName,
 		tokenName,
-		sanitizeRelayErrorLogText(err.MaskSensitiveErrorWithStatusCode()),
+		SanitizeRelayErrorLogText(err.MaskSensitiveErrorWithStatusCode()),
 		tokenID,
 		useTimeSeconds,
 		common.GetContextKeyBool(c, constant.ContextKeyIsStream),

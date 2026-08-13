@@ -91,7 +91,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
-			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+			logger.LogError(c, fmt.Sprintf("relay error: %s", service.SanitizeRelayErrorLogText(newAPIError.Error())))
 			if !service.WasRelayErrorLogged(c, newAPIError) {
 				service.RecordRelayErrorLog(c, newAPIError, service.RelayErrorLogOptions{
 					Stage: relayErrorStage,
@@ -148,7 +148,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			// Smart routing is an opt-in optimization. Any capability parsing,
 			// group resolution, or candidate lookup failure must preserve the
 			// established selector instead of rejecting a valid client request.
-			logger.LogWarn(c, fmt.Sprintf("image2 smart routing unavailable; using legacy routing: %s", routerErr.Error()))
+			logger.LogWarn(c, fmt.Sprintf("image2 smart routing unavailable; using legacy routing: %s", service.SanitizeRelayErrorLogText(routerErr.Error())))
 			image2Router = nil
 		}
 		if image2Router != nil {
@@ -245,7 +245,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					"image2_candidate_decisions": retryParam.Image2Router.DecisionSummary(),
 				}
 			}
-			logger.LogError(c, channelErr.Error())
+			logger.LogError(c, service.SanitizeRelayErrorLogText(channelErr.Error()))
 			newAPIError = channelErr
 			break
 		}
@@ -256,7 +256,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				types.ErrorCodeGetChannelFailed,
 				types.ErrOptionWithSkipRetry(),
 			)
-			logger.LogError(c, newAPIError.Error())
+			logger.LogError(c, service.SanitizeRelayErrorLogText(newAPIError.Error()))
 			break
 		}
 		addUsedChannel(c, channel.Id)
@@ -515,7 +515,7 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, service.SanitizeRelayErrorLogText(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {
@@ -659,7 +659,7 @@ func RelayTask(c *gin.Context) {
 			var channelErr *types.NewAPIError
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 			if channelErr != nil {
-				logger.LogError(c, channelErr.Error())
+				logger.LogError(c, service.SanitizeRelayErrorLogText(channelErr.Error()))
 				service.RecordRelayErrorLog(c, channelErr, service.RelayErrorLogOptions{
 					Stage: "channel_selection",
 					Extra: map[string]interface{}{
