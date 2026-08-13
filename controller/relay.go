@@ -353,9 +353,12 @@ func recordImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, rout
 		c.GetInt("id"),
 		0,
 		info.OriginModelName,
-		c.GetString("token_name"),
+		// A pre-route failure has no selected/used channel. Do not associate a
+		// token identity with this diagnostic row, even when the request context
+		// carries token metadata for normal billing/error logs.
+		"",
 		err.MaskSensitiveErrorWithStatusCode(),
-		c.GetInt("token_id"),
+		0,
 		int(time.Since(startTime).Seconds()),
 		info.IsStream,
 		group,
