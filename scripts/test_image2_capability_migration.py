@@ -11,6 +11,7 @@ from pathlib import Path
 try:
     from scripts.image2_capability_migration import (
         MigrationError,
+        _digest,
         build_plan,
         rollback_payload,
         validate_plan,
@@ -18,6 +19,7 @@ try:
 except ImportError:  # pragma: no cover - direct ``python scripts/test_...`` use
     from image2_capability_migration import (  # type: ignore
         MigrationError,
+        _digest,
         build_plan,
         rollback_payload,
         validate_plan,
@@ -97,6 +99,10 @@ def _production_history_fixture():
     }
 
 
+def _digest_for_plan(plan):
+    return _digest({key: value for key, value in plan.items() if key != "plan_sha256"})
+
+
 class Image2CapabilityMigrationTests(unittest.TestCase):
     def test_historical_a_layer_is_needs_info_and_does_not_enable_edits(self):
         snapshot = {"channels": [_channel(44)]}
@@ -108,7 +114,7 @@ class Image2CapabilityMigrationTests(unittest.TestCase):
     def test_production_history_matrix_never_promotes_legacy_edits_samples(self):
         snapshot = _production_history_fixture()
         evidence = [_proof(44, evidence_class="legacy_direct")]
-        evidence.extend(_proof(32, evidence_class="legacy_fallback") for _ in range(4))
+        evidence.append(_proof(32, evidence_class="legacy_fallback"))
         plan = build_plan(snapshot, evidence, channel_ids=[44, 32, 23, 47])
         self.assertEqual(plan["changes"], [])
         needs_info = {item["channel_id"]: item["reasons"] for item in plan["needs_info"]}
@@ -152,9 +158,32 @@ class Image2CapabilityMigrationTests(unittest.TestCase):
         snapshot = {"channels": [_channel(44)]}
         malformed = _proof(44)
         malformed["channel_id"] = "not-an-id"
-        plan = build_plan(snapshot, [malformed])
-        self.assertEqual(plan["changes"], [])
-        self.assertIn("edits_evidence_missing", plan["needs_info"][0]["reasons"])
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, [malformed])
+
+    def test_unknown_evidence_channel_is_blocked(self):
+        snapshot = {"channels": [_channel(44)]}
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, [_proof(999)])
+
+    def test_duplicate_evidence_channel_is_blocked(self):
+        snapshot = {"channels": [_channel(44)]}
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, [_proof(44), _proof(44, quality="high")])
+
+    def test_unknown_selected_channel_is_blocked(self):
+        snapshot = {"channels": [_channel(44)]}
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, [], channel_ids=[999])
+
+    def test_empty_snapshot_is_an_explicit_empty_target_error(self):
+        with self.assertRaises(MigrationError):
+            build_plan({"channels": []}, [])
+
+    def test_duplicate_selected_channel_is_blocked(self):
+        snapshot = {"channels": [_channel(44)]}
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, [], channel_ids=[44, 44])
 
     def test_unknown_capability_quality_is_rejected(self):
         snapshot = {"channels": [_channel(44)]}
@@ -172,6 +201,77 @@ class Image2CapabilityMigrationTests(unittest.TestCase):
         rollback = rollback_payload(plan)
         self.assertEqual(rollback["restore"][0]["channel_id"], 44)
         self.assertEqual(rollback["restore"][0]["restore"]["operations"], ["generations"])
+
+    def test_rollback_requires_a_complete_nonempty_plan(self):
+        with self.assertRaises(MigrationError):
+            rollback_payload({"version": 1})
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [])
+        with self.assertRaises(MigrationError):
+            rollback_payload(plan)
+
+    def test_rollback_malformed_entries_are_controlled_errors(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        malformed = copy.deepcopy(plan)
+        malformed["rollback"] = "not-a-list"
+        malformed["plan_sha256"] = "tampered"
+        with self.assertRaises(MigrationError):
+            rollback_payload(malformed)
+
+    def test_rollback_unknown_channel_is_blocked_even_with_recomputed_plan_digest(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        tampered = copy.deepcopy(plan)
+        tampered["rollback"][0]["channel_id"] = 999
+        tampered["plan_sha256"] = _digest_for_plan(tampered)
+        with self.assertRaises(MigrationError):
+            rollback_payload(tampered)
+
+    def test_validate_plan_rejects_missing_semantic_fields_even_with_recomputed_digest(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        for field in ("mode", "changes", "needs_info", "rollback"):
+            tampered = copy.deepcopy(plan)
+            del tampered[field]
+            tampered["plan_sha256"] = _digest_for_plan(tampered)
+            with self.subTest(field=field):
+                with self.assertRaises(MigrationError):
+                    validate_plan(snapshot, tampered)
+
+    def test_validate_plan_rejects_rollback_string_and_unknown_channel(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        for rollback in ("not-a-list", [{"channel_id": 999}]):
+            tampered = copy.deepcopy(plan)
+            tampered["rollback"] = rollback
+            tampered["plan_sha256"] = _digest_for_plan(tampered)
+            with self.subTest(rollback=rollback):
+                with self.assertRaises(MigrationError):
+                    validate_plan(snapshot, tampered)
+
+    def test_validate_plan_rejects_capability_digest_tampering(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        tampered = copy.deepcopy(plan)
+        tampered["changes"][0]["after"]["operations"] = ["generations"]
+        tampered["plan_sha256"] = _digest_for_plan(tampered)
+        with self.assertRaises(MigrationError):
+            validate_plan(snapshot, tampered)
+
+    def test_validate_plan_rejects_unknown_top_level_schema_field(self):
+        snapshot = {"channels": [_channel(44)]}
+        plan = build_plan(snapshot, [_proof(44)])
+        tampered = copy.deepcopy(plan)
+        tampered["unexpected"] = True
+        tampered["plan_sha256"] = _digest_for_plan(tampered)
+        with self.assertRaises(MigrationError):
+            validate_plan(snapshot, tampered)
+
+    def test_evidence_wrapper_schema_is_strict(self):
+        snapshot = {"channels": [_channel(44)]}
+        with self.assertRaises(MigrationError):
+            build_plan(snapshot, {"evidence": [_proof(44)], "unexpected": True})
 
     def test_credentials_are_rejected_before_planning(self):
         snapshot = {"channels": [_channel(44)]}

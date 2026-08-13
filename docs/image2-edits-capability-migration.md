@@ -77,5 +77,11 @@ python3 scripts/image2_capability_migration.py rollback \
 
 `plan` emits `NEEDS_INFO` for missing or historical-only evidence. `validate`
 fails closed on snapshot drift, target capability errors, credential-bearing
-input, or a plan digest mismatch. `rollback` emits exact pre-change settings
-and expected post-change digests; it performs no write.
+input, or a plan digest mismatch. The plan schema binds a non-empty, sorted
+target channel set to the snapshot inventory; `changes`, `needs_info`, and
+`rollback` must be typed, disjoint/closed sets, and every capability
+`before`/`after` and rollback restore has its own digest. Unknown or duplicate
+target/evidence/rollback channels, missing semantic fields, and a recomputed
+digest over malformed content remain blocked. `rollback` emits exact
+pre-change settings and expected post-change digests; it performs no write and
+rejects an empty change set.
