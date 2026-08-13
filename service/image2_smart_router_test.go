@@ -95,8 +95,21 @@ func TestImage2SmartRouterResolutionAndEditFiltering(t *testing.T) {
 			require.Equal(t, test.want, got)
 			_, err := router.Next()
 			require.True(t, types.IsSkipRetryError(err))
+			require.Equal(t, types.ErrorCodeGetChannelFailed, err.GetErrorCode())
 		})
 	}
+}
+
+func TestImage2SmartRouterZeroCompatibleCandidatesPreservesErrorContract(t *testing.T) {
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "edits", Resolution: "1024", N: 1},
+		[]*model.Channel{image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)},
+	)
+	require.Equal(t, 0, router.CandidateCount())
+	require.Contains(t, router.DecisionSummary(), "1:operation_unsupported")
+	_, err := router.Next()
+	require.True(t, types.IsSkipRetryError(err))
+	require.Equal(t, types.ErrorCodeGetChannelFailed, err.GetErrorCode())
 }
 
 func TestImage2SmartRouterIncompatibleCandidatesAreNeverCalled(t *testing.T) {

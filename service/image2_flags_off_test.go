@@ -23,6 +23,43 @@ func image2SmartRoutingFlag(t *testing.T, enabled bool) {
 	t.Cleanup(func() { common.Image2SmartRoutingEnabled = old })
 }
 
+func image2EditsSmartRoutingFlag(t *testing.T, enabled bool) {
+	t.Helper()
+	old := common.Image2EditsSmartRoutingEnabled
+	common.Image2EditsSmartRoutingEnabled = enabled
+	t.Cleanup(func() { common.Image2EditsSmartRoutingEnabled = old })
+}
+
+func TestImage2GenerationAndEditsHaveIndependentRoutingGates(t *testing.T) {
+	image2SmartRoutingFlag(t, true)
+	image2EditsSmartRoutingFlag(t, false)
+
+	request := &dto.ImageRequest{Size: "1024x1024"}
+	generationInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		RelayMode:       relayconstant.RelayModeImagesGenerations,
+	}
+	editInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+	}
+
+	require.True(t, Image2SmartRoutingEnabledFor(generationInfo))
+	require.False(t, Image2SmartRoutingEnabledFor(editInfo))
+
+	editContext, _ := gin.CreateTestContext(nil)
+	editRouter, err := NewImage2SmartRouter(editContext, editInfo, request)
+	require.NoError(t, err)
+	require.Nil(t, editRouter, "edits must preserve legacy routing while the edits gate is off")
+
+	image2EditsSmartRoutingFlag(t, true)
+	require.True(t, Image2SmartRoutingEnabledFor(editInfo))
+	editContext, _ = gin.CreateTestContext(nil)
+	editRouter, err = NewImage2SmartRouter(editContext, editInfo, request)
+	require.Error(t, err, "the enabled edits path must proceed to group resolution")
+	require.Nil(t, editRouter)
+}
+
 // With the flag off every Image2 request must leave the established selector
 // untouched, for both relay modes the router would otherwise claim.
 //
@@ -58,6 +95,9 @@ func TestImage2SmartRoutingDisabledShortCircuitsBeforeGroupResolution(t *testing
 			// nil-and-nil result here would mean the disabled assertion above
 			// was vacuous.
 			image2SmartRoutingFlag(t, true)
+			if mode.mode == relayconstant.RelayModeImagesEdits {
+				image2EditsSmartRoutingFlag(t, true)
+			}
 			onContext, _ := gin.CreateTestContext(nil)
 			router, err = NewImage2SmartRouter(onContext, info, request)
 			require.Error(t, err, "with the flag on the same call must get past the flag check")

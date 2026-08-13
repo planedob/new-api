@@ -49,6 +49,13 @@ type image2Candidate struct {
 
 func Image2SmartRoutingEnabled() bool { return common.Image2SmartRoutingEnabled }
 
+func Image2SmartRoutingEnabledFor(info *relaycommon.RelayInfo) bool {
+	if !Image2SmartRoutingEnabled() || !IsImage2SmartRoute(info) {
+		return false
+	}
+	return info.RelayMode != relayconstant.RelayModeImagesEdits || common.Image2EditsSmartRoutingEnabled
+}
+
 func IsImage2SmartRoute(info *relaycommon.RelayInfo) bool {
 	return info != nil && strings.EqualFold(strings.TrimSpace(info.OriginModelName), "gpt-image-2") &&
 		(info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits)
@@ -111,7 +118,7 @@ func image2Resolution(size string) (string, error) {
 // Capability metadata is opt-in, therefore an unconfigured channel is safely
 // excluded rather than guessed to support a request.
 func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest) (*Image2SmartRouter, error) {
-	if !Image2SmartRoutingEnabled() || !IsImage2SmartRoute(info) {
+	if !Image2SmartRoutingEnabledFor(info) {
 		return nil, nil
 	}
 	if _, pinned := c.Get("specific_channel_id"); pinned {
@@ -324,7 +331,13 @@ func containsFold(values []string, value string) bool {
 }
 
 func (r *Image2SmartRouter) Next() (*model.Channel, *types.NewAPIError) {
-	if r == nil || r.next >= len(r.candidates) {
+	if r == nil {
+		return nil, types.NewError(fmt.Errorf("no compatible Image2 channel remains"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if r.next >= len(r.candidates) {
+		// Keep the established response/error contract. The permanent fix
+		// records an explicit pre-route error below the controller boundary; it
+		// must not change the client-visible status or error code.
 		return nil, types.NewError(fmt.Errorf("no compatible Image2 channel remains"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	channel := r.candidates[r.next].channel
@@ -337,6 +350,20 @@ func (r *Image2SmartRouter) Next() (*model.Channel, *types.NewAPIError) {
 		}
 	}
 	return channel, nil
+}
+
+func (r *Image2SmartRouter) RequestCapability() Image2RequestCapability {
+	if r == nil {
+		return Image2RequestCapability{}
+	}
+	return r.request
+}
+
+func (r *Image2SmartRouter) CandidateCount() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.candidates)
 }
 
 func (r *Image2SmartRouter) DecisionSummary() string {

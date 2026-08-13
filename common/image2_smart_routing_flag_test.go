@@ -15,6 +15,12 @@ func TestImage2SmartRoutingShipsDisabled(t *testing.T) {
 	}
 }
 
+func TestImage2EditsSmartRoutingShipsDisabled(t *testing.T) {
+	if Image2EditsSmartRoutingEnabled {
+		t.Fatal("Image2EditsSmartRoutingEnabled must default to false before InitEnv runs")
+	}
+}
+
 // Second, the environment cannot enable it by accident. InitEnv resolves the
 // flag with GetEnvOrDefaultBool(..., false), and strconv.ParseBool accepts a
 // narrow vocabulary: "yes", "on" and "enabled" are not booleans, so they fall
@@ -49,6 +55,26 @@ func TestImage2SmartRoutingEnvResolvesFailClosed(t *testing.T) {
 			if test.set {
 				t.Setenv(key, test.value)
 			}
+			if got := GetEnvOrDefaultBool(key, false); got != test.want {
+				t.Fatalf("GetEnvOrDefaultBool(%s=%q) = %t, want %t", key, test.value, got, test.want)
+			}
+		})
+	}
+}
+
+func TestImage2EditsSmartRoutingEnvResolvesFailClosed(t *testing.T) {
+	const key = "IMAGE2_EDITS_SMART_ROUTING_ENABLED"
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "", want: false},
+		{value: "false", want: false},
+		{value: "yes", want: false},
+		{value: "true", want: true},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			t.Setenv(key, test.value)
 			if got := GetEnvOrDefaultBool(key, false); got != test.want {
 				t.Fatalf("GetEnvOrDefaultBool(%s=%q) = %t, want %t", key, test.value, got, test.want)
 			}

@@ -225,6 +225,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
+			if retryParam.GetRetry() == 0 && len(c.GetStringSlice("use_channel")) == 0 {
+				recordImage2PreRouteError(c, relayInfo, image2Router, channelErr)
+			}
 			newAPIError = channelErr
 			break
 		}
@@ -293,12 +296,79 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 }
 
+func image2ResolvedGroup(c *gin.Context, info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	group := ""
+	if c != nil {
+		group = common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
+	}
+	if group == "" {
+		group = info.UsingGroup
+	}
+	if group == "" || group == "auto" {
+		group = info.TokenGroup
+	}
+	return group
+}
+
+func image2PreRouteErrorMetadata(c *gin.Context, info *relaycommon.RelayInfo, request service.Image2RequestCapability, candidateCount int, filterReasons string, err *types.NewAPIError) map[string]interface{} {
+	other := map[string]interface{}{
+		"stage":           "channel_selection",
+		"operation":       request.Operation,
+		"resolution":      request.Resolution,
+		"quality":         request.Quality,
+		"n":               request.N,
+		"candidate_count": candidateCount,
+		"filter_reasons":  filterReasons,
+		"upstream_called": false,
+		"quota":           0,
+		"channel_id":      0,
+		"error_code":      err.GetErrorCode(),
+		"status_code":     err.StatusCode,
+		"model":           info.OriginModelName,
+		"group":           image2ResolvedGroup(c, info),
+	}
+	if c != nil && c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	return other
+}
+
+func recordImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, router *service.Image2SmartRouter, err *types.NewAPIError) {
+	if c == nil || info == nil || router == nil || err == nil ||
+		!constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) ||
+		err.GetErrorCode() != types.ErrorCodeGetChannelFailed ||
+		router.CandidateCount() != 0 {
+		return
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	group := image2ResolvedGroup(c, info)
+	model.RecordErrorLog(
+		c,
+		c.GetInt("id"),
+		0,
+		info.OriginModelName,
+		c.GetString("token_name"),
+		err.MaskSensitiveErrorWithStatusCode(),
+		c.GetInt("token_id"),
+		int(time.Since(startTime).Seconds()),
+		info.IsStream,
+		group,
+		image2PreRouteErrorMetadata(c, info, router.RequestCapability(), router.CandidateCount(), router.DecisionSummary(), err),
+	)
+}
+
 // image2SmartRequestValidationError separates deterministic request-shape
 // failures from optional smart-router lookup failures. The latter may still
 // use the legacy selector, but an enabled Image2 request that exceeds the
 // router's supported dimensions must fail closed before channel selection.
 func image2SmartRequestValidationError(info *relaycommon.RelayInfo, request *dto.ImageRequest) *types.NewAPIError {
-	if !service.Image2SmartRoutingEnabled() || !service.IsImage2SmartRoute(info) {
+	if !service.Image2SmartRoutingEnabledFor(info) {
 		return nil
 	}
 	if _, err := service.ParseImage2RequestCapability(info, request); err != nil {

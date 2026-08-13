@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -60,4 +62,36 @@ func TestRelayImage2OversizeRequestFailsAtRequestEntryWithoutSideEffects(t *test
 	require.Empty(t, ctx.GetStringSlice("use_channel"), "invalid Image2 size must not select a channel")
 	_, routerActive := ctx.Get("image2_smart_router_active")
 	require.False(t, routerActive, "invalid Image2 size must not activate smart routing")
+}
+
+func TestImage2PreRouteErrorMetadataIsQueryableAndSanitized(t *testing.T) {
+	for _, requestPath := range []string{"/v1/images/edits", "/pg/images/edits"} {
+		t.Run(requestPath, func(t *testing.T) {
+			request := service.Image2RequestCapability{Operation: "edits", Resolution: "1024", Quality: "auto", N: 1}
+			routeErr := types.NewErrorWithStatusCode(
+				fmt.Errorf("no compatible Image2 channel remains"),
+				types.ErrorCodeGetChannelFailed,
+				http.StatusInternalServerError,
+				types.ErrOptionWithSkipRetry(),
+			)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, requestPath, strings.NewReader("secret image payload"))
+			common.SetContextKey(ctx, constant.ContextKeyAutoGroup, "resolved-auto-group")
+			metadata := image2PreRouteErrorMetadata(ctx, &relaycommon.RelayInfo{
+				OriginModelName: "gpt-image-2",
+				UsingGroup:      "stale-using-group",
+				TokenGroup:      "auto",
+			}, request, 0, "44:operation_unsupported", routeErr)
+
+			require.Equal(t, "channel_selection", metadata["stage"])
+			require.Equal(t, "edits", metadata["operation"])
+			require.Equal(t, 0, metadata["candidate_count"])
+			require.Equal(t, false, metadata["upstream_called"])
+			require.Equal(t, 0, metadata["quota"])
+			require.Equal(t, requestPath, metadata["request_path"])
+			require.Equal(t, "resolved-auto-group", metadata["group"])
+			encoded := common.MapToJsonStr(metadata)
+			require.NotContains(t, encoded, "secret image payload")
+		})
+	}
 }

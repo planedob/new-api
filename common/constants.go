@@ -162,6 +162,12 @@ var SafeFailoverImageGuardSeconds = 60
 // It defaults off so a deployment preserves the established channel selector.
 var Image2SmartRoutingEnabled = false
 
+// Image2EditsSmartRoutingEnabled independently gates capability-driven
+// routing for Image2 edits. It defaults off so generation routing can be
+// enabled without diverting the established /images/edits path before edit
+// capabilities have been migrated and accepted.
+var Image2EditsSmartRoutingEnabled = false
+
 // EntitlementFeatureEnabled gates the directed entitlement enforcement path.
 // Operators can set ENTITLEMENT_FEATURE_ENABLED=false for an emergency rollback
 // without deleting package, user-grant or token-grant records.
