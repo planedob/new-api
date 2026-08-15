@@ -25,8 +25,15 @@ type Image2RequestCapability struct {
 	Operation  string
 	Resolution string
 	Size       string
-	Quality    string
-	N          uint
+	// RequestedQuality preserves the client's legal quality enum for audit and
+	// diagnostics. It must never be used as an upstream capability filter.
+	RequestedQuality string
+	// EffectiveQuality is the platform wire contract. Image2 currently uses
+	// provider-default quality for every legal client quality value.
+	EffectiveQuality string
+	// Quality is retained as the normalized effective value for existing callers.
+	Quality string
+	N       uint
 }
 
 type Image2CandidateDecision struct {
@@ -69,6 +76,23 @@ func IsImage2SmartRoute(info *relaycommon.RelayInfo) bool {
 		(info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits)
 }
 
+// NormalizeImage2Quality validates the public Image2 quality enum and returns
+// the value retained for audit together with the platform's effective value.
+// Image2 upstreams are deliberately called with their default/auto quality;
+// the client-requested high value is never claimed to have been executed.
+func NormalizeImage2Quality(quality string) (requested, effective string, err error) {
+	requested = strings.ToLower(strings.TrimSpace(quality))
+	if requested == "" {
+		requested = "auto"
+	}
+	switch requested {
+	case "auto", "standard", "high":
+		return requested, "auto", nil
+	default:
+		return requested, "", fmt.Errorf("unsupported Image2 quality %q; expected auto, standard, or high", quality)
+	}
+}
+
 func ParseImage2RequestCapability(info *relaycommon.RelayInfo, request *dto.ImageRequest) (Image2RequestCapability, error) {
 	if !IsImage2SmartRoute(info) || request == nil {
 		return Image2RequestCapability{}, fmt.Errorf("not an Image2 image request")
@@ -88,14 +112,19 @@ func ParseImage2RequestCapability(info *relaycommon.RelayInfo, request *dto.Imag
 			return Image2RequestCapability{}, fmt.Errorf("invalid Image2 n %d; expected a positive integer", n)
 		}
 	}
-	quality := strings.ToLower(strings.TrimSpace(request.Quality))
-	if quality == "" {
-		quality = "auto"
+	requestedQuality, effectiveQuality, err := NormalizeImage2Quality(request.Quality)
+	if err != nil {
+		return Image2RequestCapability{}, err
 	}
-	if quality != "auto" && quality != "standard" && quality != "high" {
-		return Image2RequestCapability{}, fmt.Errorf("unsupported Image2 quality %q; expected auto, standard, or high", request.Quality)
-	}
-	return Image2RequestCapability{Operation: operation, Resolution: resolution, Size: canonicalImage2Size(request.Size), Quality: quality, N: n}, nil
+	return Image2RequestCapability{
+		Operation:        operation,
+		Resolution:       resolution,
+		Size:             canonicalImage2Size(request.Size),
+		RequestedQuality: requestedQuality,
+		EffectiveQuality: effectiveQuality,
+		Quality:          effectiveQuality,
+		N:                n,
+	}, nil
 }
 
 func canonicalImage2Size(size string) string {
@@ -217,6 +246,7 @@ func newImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel
 }
 
 func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel) (*Image2SmartRouter, bool) {
+	req = normalizeImage2RequestCapability(req)
 	router := &Image2SmartRouter{request: req, decisions: make([]Image2CandidateDecision, 0, len(channels)), options: make([]image2CapabilityOption, 0)}
 	configured := false
 	seenChannelIDs := make(map[int]struct{}, len(channels))
@@ -398,14 +428,9 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 		return "image2_capability_not_enabled"
 	}
 	if len(capability.Profiles) > 0 {
-		requestQuality := strings.ToLower(strings.TrimSpace(req.Quality))
-		if requestQuality == "" || requestQuality == "auto" {
-			requestQuality = "default"
-		}
 		for _, profile := range capability.Profiles {
 			if !strings.EqualFold(strings.TrimSpace(profile.Operation), req.Operation) ||
-				!strings.EqualFold(strings.TrimSpace(profile.Resolution), req.Resolution) ||
-				!strings.EqualFold(strings.TrimSpace(profile.Quality), requestQuality) {
+				!strings.EqualFold(strings.TrimSpace(profile.Resolution), req.Resolution) {
 				continue
 			}
 			if profile.Size != "" && canonicalImage2Size(profile.Size) != canonicalImage2Size(req.Size) {
@@ -426,21 +451,70 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 	if !containsFold(capability.Resolutions, req.Resolution) {
 		return "resolution_unsupported"
 	}
-	// Omitted/auto quality means "use the provider default". Every other
-	// explicit quality must be declared so an empty list cannot silently act as
-	// a wildcard for unverified upstream capabilities.
-	if req.Quality != "" && !strings.EqualFold(strings.TrimSpace(req.Quality), "auto") {
-		if len(capability.Qualities) == 0 {
-			return "quality_unverified"
-		}
-		if !containsFold(capability.Qualities, req.Quality) {
-			return "quality_unsupported"
-		}
+	// Legal quality is normalized to the provider default before this function
+	// runs. It is intentionally not a hard candidate dimension. Keep a small
+	// defensive guard for direct internal callers that bypass Parse...
+	if req.Quality != "" && req.Quality != "auto" {
+		return "quality_unsupported"
 	}
 	if capability.MaxN > 0 && req.N > capability.MaxN {
 		return "n_exceeds_limit"
 	}
 	return ""
+}
+
+func normalizeImage2RequestCapability(req Image2RequestCapability) Image2RequestCapability {
+	requested := strings.ToLower(strings.TrimSpace(req.RequestedQuality))
+	effective := strings.ToLower(strings.TrimSpace(req.EffectiveQuality))
+	quality := strings.ToLower(strings.TrimSpace(req.Quality))
+	if requested == "" {
+		requested = quality
+	}
+	if requested == "" {
+		requested = "auto"
+	}
+	if effective == "" {
+		if quality == "auto" || quality == "standard" || quality == "high" || quality == "" {
+			effective = "auto"
+		}
+	}
+	if effective == "auto" {
+		quality = "auto"
+	}
+	req.RequestedQuality = requested
+	req.EffectiveQuality = effective
+	req.Quality = quality
+	return req
+}
+
+// NormalizeImage2RequestForUpstream updates only the copied request used by an
+// adaptor. The original request remains available for requested/effective audit
+// fields, while no Image2 upstream receives client quality=high verbatim.
+func NormalizeImage2RequestForUpstream(info *relaycommon.RelayInfo, request *dto.ImageRequest) (Image2RequestCapability, error) {
+	if !IsImage2SmartRoute(info) || request == nil {
+		return Image2RequestCapability{}, fmt.Errorf("not an Image2 image request")
+	}
+	requestedQuality, effectiveQuality, err := NormalizeImage2Quality(request.Quality)
+	if err != nil {
+		return Image2RequestCapability{}, err
+	}
+	capability := Image2RequestCapability{
+		RequestedQuality: requestedQuality,
+		EffectiveQuality: effectiveQuality,
+		Quality:          effectiveQuality,
+	}
+	// Keep legacy Image2 routing independent from smart-router dimension
+	// validation. In that mode only quality normalization is required before
+	// the adaptor; the existing selector/upstream remains responsible for the
+	// provider's size and n contract.
+	if Image2SmartRoutingEnabledFor(info) {
+		capability, err = ParseImage2RequestCapability(info, request)
+		if err != nil {
+			return Image2RequestCapability{}, err
+		}
+	}
+	request.Quality = capability.EffectiveQuality
+	return capability, nil
 }
 
 func containsFold(values []string, value string) bool {

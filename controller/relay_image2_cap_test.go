@@ -40,6 +40,23 @@ func TestImage2OversizeRequestFailsBeforeLegacyChannelSelection(t *testing.T) {
 	}
 }
 
+func TestImage2LegacyRoutingStillOwnsDimensionValidation(t *testing.T) {
+	old := common.Image2SmartRoutingEnabled
+	common.Image2SmartRoutingEnabled = false
+	t.Cleanup(func() { common.Image2SmartRoutingEnabled = old })
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		RelayMode:       relayconstant.RelayModeImagesGenerations,
+	}
+	require.Nil(t, image2SmartRequestValidationError(info, &dto.ImageRequest{Size: "8192x8192"}),
+		"legacy Image2 routing must not inherit smart-router size rejection")
+
+	qualityErr := image2SmartRequestValidationError(info, &dto.ImageRequest{Quality: "ultra"})
+	require.NotNil(t, qualityErr, "unknown Image2 quality must remain a deterministic 400")
+	require.Equal(t, http.StatusBadRequest, qualityErr.StatusCode)
+}
+
 func TestRelayImage2OversizeRequestFailsAtRequestEntryWithoutSideEffects(t *testing.T) {
 	old := common.Image2SmartRoutingEnabled
 	common.Image2SmartRoutingEnabled = true

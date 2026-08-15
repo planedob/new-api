@@ -331,22 +331,36 @@ func image2ResolvedGroup(c *gin.Context, info *relaycommon.RelayInfo) string {
 }
 
 func image2PreRouteErrorMetadata(c *gin.Context, info *relaycommon.RelayInfo, request service.Image2RequestCapability, candidateCount int, filterReasons string, err *types.NewAPIError) map[string]interface{} {
+	requestedQuality := strings.ToLower(strings.TrimSpace(request.RequestedQuality))
+	if requestedQuality == "" {
+		requestedQuality = strings.ToLower(strings.TrimSpace(request.Quality))
+	}
+	if requestedQuality == "" {
+		requestedQuality = "auto"
+	}
+	effectiveQuality := strings.ToLower(strings.TrimSpace(request.EffectiveQuality))
+	if effectiveQuality == "" {
+		effectiveQuality = "auto"
+	}
 	other := map[string]interface{}{
-		"stage":           "channel_selection",
-		"operation":       request.Operation,
-		"resolution":      request.Resolution,
-		"quality":         request.Quality,
-		"n":               request.N,
-		"candidate_count": candidateCount,
-		"filter_reasons":  filterReasons,
-		"upstream_called": false,
-		"charged":         false,
-		"quota":           0,
-		"channel_id":      0,
-		"error_code":      err.GetErrorCode(),
-		"status_code":     err.StatusCode,
-		"model":           info.OriginModelName,
-		"group":           image2ResolvedGroup(c, info),
+		"stage":             "channel_selection",
+		"operation":         request.Operation,
+		"resolution":        request.Resolution,
+		"size":              request.Size,
+		"requested_quality": requestedQuality,
+		"effective_quality": effectiveQuality,
+		"quality":           effectiveQuality,
+		"n":                 request.N,
+		"candidate_count":   candidateCount,
+		"filter_reasons":    filterReasons,
+		"upstream_called":   false,
+		"charged":           false,
+		"quota":             0,
+		"channel_id":        0,
+		"error_code":        err.GetErrorCode(),
+		"status_code":       err.StatusCode,
+		"model":             info.OriginModelName,
+		"group":             image2ResolvedGroup(c, info),
 	}
 	if c != nil && c.Request != nil && c.Request.URL != nil {
 		other["request_path"] = c.Request.URL.Path
@@ -390,11 +404,20 @@ func recordImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, rout
 	)
 }
 
-// image2SmartRequestValidationError separates deterministic request-shape
-// failures from optional smart-router lookup failures. The latter may still
-// use the legacy selector, but an enabled Image2 request that exceeds the
-// router's supported dimensions must fail closed before channel selection.
+// image2SmartRequestValidationError separates the public Image2 quality enum
+// from optional smart-router request-shape validation. Quality must be valid
+// even when the router is disabled, while size/n validation remains scoped to
+// smart routing so Default/Classic requests keep their legacy behavior.
 func image2SmartRequestValidationError(info *relaycommon.RelayInfo, request *dto.ImageRequest) *types.NewAPIError {
+	if !service.IsImage2SmartRoute(info) {
+		return nil
+	}
+	if request == nil {
+		return nil
+	}
+	if _, _, err := service.NormalizeImage2Quality(request.Quality); err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
 	if !service.Image2SmartRoutingEnabledFor(info) {
 		return nil
 	}

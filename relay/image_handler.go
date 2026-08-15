@@ -33,6 +33,20 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(fmt.Errorf("failed to copy request to ImageRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	// Image2 quality is a compatibility hint, not a provider guarantee. Keep
+	// the original value in the authenticated request context for audit, but
+	// send the normalized effective value through every adaptor. This also
+	// prevents OpenAI-compatible multipart edits from copying quality=high from
+	// the original form after routing has accepted the request.
+	if service.IsImage2SmartRoute(info) {
+		capability, normalizeErr := service.NormalizeImage2RequestForUpstream(info, request)
+		if normalizeErr != nil {
+			return types.NewErrorWithStatusCode(normalizeErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		c.Set("image2_requested_quality", capability.RequestedQuality)
+		c.Set("image2_effective_quality", capability.EffectiveQuality)
+	}
+
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
@@ -46,7 +60,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	var requestBody io.Reader
 
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	// The Image2 compatibility contract requires the normalized quality to reach
+	// the adaptor, so raw pass-through is intentionally bypassed for Image2.
+	if (model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled) && !service.IsImage2SmartRoute(info) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -156,7 +172,15 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	quality := "standard"
-	if request.Quality == "hd" {
+	if service.IsImage2SmartRoute(info) {
+		requestedQuality, _ := c.Get("image2_requested_quality")
+		effectiveQuality, _ := c.Get("image2_effective_quality")
+		if requested, ok := requestedQuality.(string); ok && requested != "" {
+			if effective, ok := effectiveQuality.(string); ok && effective != "" {
+				quality = fmt.Sprintf("requested=%s effective=%s", requested, effective)
+			}
+		}
+	} else if request.Quality == "hd" {
 		quality = "hd"
 	}
 

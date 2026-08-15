@@ -49,6 +49,8 @@ type Image2ErrorMetadata struct {
 	Operation             string                 `json:"operation"`
 	Resolution            string                 `json:"resolution"`
 	Size                  string                 `json:"size"`
+	RequestedQuality      string                 `json:"requested_quality"`
+	EffectiveQuality      string                 `json:"effective_quality"`
 	Quality               string                 `json:"quality"`
 	N                     uint                   `json:"n"`
 	UnsupportedDimensions []string               `json:"unsupported_dimensions"`
@@ -75,11 +77,8 @@ func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 	if r == nil {
 		return Image2RoutingExplanation{}
 	}
-	request := r.request
+	request := normalizeImage2RequestCapability(r.request)
 	request.Size = canonicalImage2Size(request.Size)
-	if strings.TrimSpace(request.Quality) == "" {
-		request.Quality = "auto"
-	}
 	if request.N == 0 {
 		request.N = 1
 	}
@@ -87,7 +86,7 @@ func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 	if len(options) == 0 {
 		return Image2RoutingExplanation{
 			Request:               request,
-			UnsupportedDimensions: []string{"operation", "size", "quality", "n"},
+			UnsupportedDimensions: []string{"operation", "size", "n"},
 			SupportedValues:       emptyImage2SupportedValues(),
 			Alternatives:          []Image2Alternative{},
 			HasConfigured:         r.configured,
@@ -120,7 +119,7 @@ func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 		nearestOptions = options
 	}
 	if len(nearestOptions) == 0 && len(options) == 0 {
-		unsupported = []string{"operation", "size", "quality", "n"}
+		unsupported = []string{"operation", "size", "n"}
 	}
 
 	return Image2RoutingExplanation{
@@ -153,7 +152,6 @@ func image2PreferredOptions(request Image2RequestCapability, options []image2Cap
 func image2AllDimensionsHaveSupport(request Image2RequestCapability, options []image2CapabilityOption) bool {
 	operationSupported := false
 	sizeSupported := false
-	qualitySupported := false
 	nSupported := false
 	for _, option := range options {
 		if strings.EqualFold(option.alternative.Operation, request.Operation) {
@@ -162,14 +160,11 @@ func image2AllDimensionsHaveSupport(request Image2RequestCapability, options []i
 		if image2OptionMatchesSize(request, option) {
 			sizeSupported = true
 		}
-		if strings.EqualFold(option.alternative.Quality, request.Quality) {
-			qualitySupported = true
-		}
 		if option.maxN == 0 || option.maxN >= request.N {
 			nSupported = true
 		}
 	}
-	return operationSupported && sizeSupported && qualitySupported && nSupported
+	return operationSupported && sizeSupported && nSupported
 }
 
 func image2OptionMismatches(request Image2RequestCapability, option image2CapabilityOption) []string {
@@ -179,9 +174,6 @@ func image2OptionMismatches(request Image2RequestCapability, option image2Capabi
 	}
 	if !image2OptionMatchesSize(request, option) {
 		mismatches = append(mismatches, "size")
-	}
-	if !strings.EqualFold(option.alternative.Quality, request.Quality) {
-		mismatches = append(mismatches, "quality")
 	}
 	if option.maxN != 0 && option.maxN < request.N {
 		mismatches = append(mismatches, "n")
@@ -348,10 +340,9 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 	options := make([]image2CapabilityOption, 0)
 	if len(capability.Profiles) > 0 {
 		for _, profile := range capability.Profiles {
-			quality := strings.ToLower(strings.TrimSpace(profile.Quality))
-			if quality == "default" || quality == "" {
-				quality = "auto"
-			}
+			// Keep the declared profile quality in channel settings for audit, but
+			// do not expose standard/high as distinct routing alternatives.
+			quality := "auto"
 			resolution := strings.ToLower(strings.TrimSpace(profile.Resolution))
 			size := canonicalImage2Size(profile.Size)
 			if profile.Size == "" {
@@ -366,17 +357,8 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 		}
 		return options
 	}
-	// image2Incompatibility treats omitted/auto quality as the provider default
-	// even when an explicit standard/high allow-list is present. Include that
-	// implicit default in the explanation so a size-only mismatch is not
-	// incorrectly reported as a quality mismatch.
+	// Quality is normalized to provider default for every legal client value.
 	qualities := []string{"auto"}
-	for _, quality := range capability.Qualities {
-		quality = strings.ToLower(strings.TrimSpace(quality))
-		if quality != "" && quality != "auto" {
-			qualities = append(qualities, quality)
-		}
-	}
 	// Alternatives are suggestions, not an exhaustive n contract. Keep them
 	// bounded and conservative so an unbounded declaration never suggests a
 	// potentially expensive fan-out.
@@ -400,11 +382,11 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 }
 
 func image2ErrorMessage(explanation Image2RoutingExplanation, temporarilyUnavailable bool) string {
-	request := explanation.Request
+	request := normalizeImage2RequestCapability(explanation.Request)
 	if temporarilyUnavailable {
 		return fmt.Sprintf(
-			"Image2 request is temporarily unavailable: operation=%s, resolution=%s, size=%s, quality=%s, n=%d; a configured compatible capability exists but all matching channels are temporarily unavailable; upstream_called=false; charged=false",
-			request.Operation, request.Resolution, request.Size, request.Quality, request.N,
+			"Image2 request is temporarily unavailable: operation=%s, resolution=%s, size=%s, requested_quality=%s, effective_quality=%s, n=%d; a configured compatible capability exists but all matching channels are temporarily unavailable; upstream_called=false; charged=false",
+			request.Operation, request.Resolution, request.Size, request.RequestedQuality, request.EffectiveQuality, request.N,
 		)
 	}
 	dimensions := make([]string, 0, len(explanation.UnsupportedDimensions))
@@ -421,9 +403,9 @@ func image2ErrorMessage(explanation Image2RoutingExplanation, temporarilyUnavail
 		prefix += ": complete combination unsupported"
 	}
 	return fmt.Sprintf(
-		"%s: %s; safe alternatives: %s; operation=%s, resolution=%s, size=%s, quality=%s, n=%d; upstream_called=false; charged=false",
+		"%s: %s; safe alternatives: %s; operation=%s, resolution=%s, size=%s, requested_quality=%s, effective_quality=%s, n=%d; upstream_called=false; charged=false",
 		prefix,
-		strings.Join(dimensions, "; "), formatImage2Alternatives(explanation.Alternatives), request.Operation, request.Resolution, request.Size, request.Quality, request.N,
+		strings.Join(dimensions, "; "), formatImage2Alternatives(explanation.Alternatives), request.Operation, request.Resolution, request.Size, request.RequestedQuality, request.EffectiveQuality, request.N,
 	)
 }
 
@@ -465,6 +447,7 @@ func NewImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, router 
 		return nil
 	}
 	explanation := router.Explain()
+	explanation.Request = normalizeImage2RequestCapability(explanation.Request)
 	temporarilyUnavailable := explanation.HasTemporary && len(router.candidates) == 0 && len(explanation.UnsupportedDimensions) == 0
 	statusCode := http.StatusUnprocessableEntity
 	errorCode := types.ErrorCodeUnsupportedImageConfiguration
@@ -480,7 +463,9 @@ func NewImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, router 
 		Operation:             explanation.Request.Operation,
 		Resolution:            explanation.Request.Resolution,
 		Size:                  explanation.Request.Size,
-		Quality:               explanation.Request.Quality,
+		RequestedQuality:      explanation.Request.RequestedQuality,
+		EffectiveQuality:      explanation.Request.EffectiveQuality,
+		Quality:               explanation.Request.EffectiveQuality,
 		N:                     explanation.Request.N,
 		UnsupportedDimensions: append([]string{}, explanation.UnsupportedDimensions...),
 		SupportedValues:       explanation.SupportedValues,

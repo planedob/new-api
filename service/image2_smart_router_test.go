@@ -512,11 +512,10 @@ func TestImage2SmartRouterEmptyQualitiesFailClosedForExplicitQuality(t *testing.
 			router := newImage2SmartRouter(Image2RequestCapability{
 				Operation: "edits", Resolution: "1024", Quality: quality, N: 1,
 			}, []*model.Channel{channel})
-			require.Equal(t, 0, router.CandidateCount())
-			require.Contains(t, router.DecisionSummary(), "44:quality_unverified")
-			_, err := router.Next()
-			require.Error(t, err)
-			require.True(t, types.IsSkipRetryError(err))
+			selected, err := router.Next()
+			require.Nil(t, err)
+			require.Equal(t, channel.Id, selected.Id)
+			require.Equal(t, "auto", router.RequestCapability().Quality)
 		})
 	}
 
@@ -576,9 +575,9 @@ func TestImage2WebCodexAdobeCapabilityCandidateChains(t *testing.T) {
 			wantNames: []string{"Web", "Codex", "Adobe"},
 		},
 		{
-			name:      "quality high removes Web before any upstream call",
+			name:      "quality high is normalized and keeps Web eligible",
 			request:   Image2RequestCapability{Operation: "generations", Resolution: "1024", Quality: "high", N: 1},
-			wantNames: []string{"Codex", "Adobe"},
+			wantNames: []string{"Web", "Codex", "Adobe"},
 		},
 		{
 			name:      "2048 generation starts at Codex then Adobe",

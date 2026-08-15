@@ -446,10 +446,19 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				if key == "model" {
 					continue
 				}
+				if key == "quality" && service.IsImage2SmartRoute(info) {
+					// Image2 legal quality values are normalized to the provider
+					// default in relay.ImageHelper. Do not copy the original
+					// multipart quality=high through to an upstream.
+					continue
+				}
 				for _, value := range values {
 					writer.WriteField(key, value)
 				}
 			}
+		}
+		if service.IsImage2SmartRoute(info) && request.Quality != "" {
+			writer.WriteField("quality", request.Quality)
 		}
 
 		if mf != nil && mf.File != nil {
