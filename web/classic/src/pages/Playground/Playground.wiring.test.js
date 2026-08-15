@@ -41,6 +41,16 @@ mock.module(helpersModulePath, () => ({
   processModelsData: () => ({ modelOptions: [], selectedModel: '' }),
   processGroupsData: () => [],
   showError: () => {},
+  getLogo: () => 'logo',
+  stringToColor: () => '#000000',
+  buildMessageContent: (content) => content,
+  createMessage: (role, content) => ({ role, content }),
+  createLoadingAssistantMessage: () => ({ status: 'loading' }),
+  getTextContent: () => '',
+  buildApiPayload: () => ({}),
+  buildImagePayload: () => ({}),
+  isGptImage2Model: () => true,
+  encodeToBase64: (value) => value,
 }));
 
 let useDataLoader;
@@ -75,19 +85,6 @@ const CapabilityLoaderHarness = ({ setImage2Capability, onLoad }) => {
     'Image2 capability loader mounted',
   );
 };
-
-test('786 wiring failure is characterized as a ReferenceError before loader mount', () => {
-  const LegacyMissingSetterHarness = () => {
-    // This is the exact unresolved identifier shape from the 786 Playground
-    // wiring: the hook call never mounts because the setter is not in scope.
-    const missingSetter = globalThis.eval('setImage2Capability');
-    return React.createElement('output', null, missingSetter);
-  };
-
-  expect(() =>
-    renderToStaticMarkup(React.createElement(LegacyMissingSetterHarness)),
-  ).toThrow(ReferenceError);
-});
 
 test('descendant wiring mounts the real loader and applies capability success', async () => {
   const capability = { generations: [{ size: '3840x2160' }] };
