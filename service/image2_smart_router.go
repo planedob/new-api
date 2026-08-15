@@ -214,25 +214,42 @@ func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Chann
 			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_invalid"})
 			continue
 		}
-		capability := setting.Image2Capability
-		if capability != nil {
+		// A supplier declaration is the primary routing contract. Controlled
+		// tests remain a fallback when the supplier did not publish a capability
+		// statement; they are no longer a mandatory proof for every declared
+		// operation/size/quality combination.
+		capability := setting.Image2DeclaredCapability
+		usingSupplierDeclaration := capability != nil
+		if usingSupplierDeclaration {
+			configured = true
 			if err := capability.Validate(); err != nil {
-				// A malformed opt-in is a configured-but-invalid capability. Do not
-				// let it silently fall back to the legacy selector or guess a
-				// provider operation from the model name.
-				configured = true
-				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_invalid"})
+				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_declared_capability_invalid"})
 				continue
 			}
-		}
-		if capability != nil && capability.Enabled {
-			configured = true
-		}
-		if setting.Image2CapabilityVerification != nil || common.Image2VerifiedCapabilityRequired {
-			configured = true
-			if reason := setting.Image2CapabilityVerification.RoutingReason(time.Now().UTC(), capability); reason != "" {
-				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
+			if !capability.Enabled {
+				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_declared_capability_not_enabled"})
 				continue
+			}
+		} else {
+			capability = setting.Image2Capability
+			if capability != nil {
+				if err := capability.Validate(); err != nil {
+					// A malformed tested/legacy opt-in is configured but invalid. Do
+					// not guess provider support from a model name.
+					configured = true
+					router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_invalid"})
+					continue
+				}
+			}
+			if capability != nil && capability.Enabled {
+				configured = true
+			}
+			if setting.Image2CapabilityVerification != nil || common.Image2VerifiedCapabilityRequired {
+				configured = true
+				if reason := setting.Image2CapabilityVerification.RoutingReason(time.Now().UTC(), capability); reason != "" {
+					router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
+					continue
+				}
 			}
 		}
 		if reason := image2Incompatibility(req, capability); reason != "" {

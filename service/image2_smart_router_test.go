@@ -57,7 +57,65 @@ func markImage2CapabilityVerified(channel *model.Channel, status string, verifie
 	channel.SetSetting(setting)
 }
 
-func TestImage2SmartRouterStrictVerificationUsesTestsNotDeclarations(t *testing.T) {
+func setImage2DeclaredCapability(channel *model.Channel, capability *dto.Image2ChannelCapability) {
+	setting := channel.GetSetting()
+	setting.Image2DeclaredCapability = capability
+	channel.SetSetting(setting)
+}
+
+func TestImage2SmartRouterPrefersSupplierDeclarationWithoutCombinationProof(t *testing.T) {
+	old := common.Image2VerifiedCapabilityRequired
+	common.Image2VerifiedCapabilityRequired = true
+	t.Cleanup(func() { common.Image2VerifiedCapabilityRequired = old })
+
+	channel := image2ProfileChannel(44, "FriModel Adobe", 10, []string{"generations"}, []string{"1024"}, []string{"standard"}, 1, false)
+	setImage2DeclaredCapability(channel, &dto.Image2ChannelCapability{
+		Enabled: true, Operations: []string{"generations", "edits"}, Resolutions: []string{"1024", "2048", "uhd"},
+		Qualities: []string{"standard", "high"}, MaxN: 1, EditsAccepted: true, RoutePriority: 10,
+	})
+
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "2048", Size: "2048x2048", Quality: "high", N: 1},
+		[]*model.Channel{channel},
+	)
+	selected, err := router.Next()
+	require.Nil(t, err)
+	require.Equal(t, 44, selected.Id)
+}
+
+func TestImage2SmartRouterFallsBackToVerifiedTestsWhenSupplierDeclarationMissing(t *testing.T) {
+	old := common.Image2VerifiedCapabilityRequired
+	common.Image2VerifiedCapabilityRequired = true
+	t.Cleanup(func() { common.Image2VerifiedCapabilityRequired = old })
+
+	now := time.Now().UTC()
+	channel := image2ProfileChannel(74, "tested fallback", 20, []string{"generations"}, []string{"1024"}, nil, 1, false)
+	markImage2CapabilityVerified(channel, "passed", now.Add(-time.Hour), now.Add(time.Hour))
+
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "1024", Size: "1024x1024", Quality: "auto", N: 1},
+		[]*model.Channel{channel},
+	)
+	selected, err := router.Next()
+	require.Nil(t, err)
+	require.Equal(t, 74, selected.Id)
+}
+
+func TestImage2SmartRouterInvalidSupplierDeclarationDoesNotGuessOrFallback(t *testing.T) {
+	now := time.Now().UTC()
+	channel := image2ProfileChannel(44, "invalid declaration", 10, []string{"generations"}, []string{"1024"}, nil, 1, false)
+	markImage2CapabilityVerified(channel, "passed", now.Add(-time.Hour), now.Add(time.Hour))
+	setImage2DeclaredCapability(channel, &dto.Image2ChannelCapability{Enabled: true, Resolutions: []string{"1024"}, MaxN: 1})
+
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "1024", Size: "1024x1024", Quality: "auto", N: 1},
+		[]*model.Channel{channel},
+	)
+	require.Equal(t, 0, router.CandidateCount())
+	require.Contains(t, router.DecisionSummary(), "44:image2_declared_capability_invalid")
+}
+
+func TestImage2SmartRouterStrictVerificationRequiresTestsWhenDeclarationMissing(t *testing.T) {
 	old := common.Image2VerifiedCapabilityRequired
 	common.Image2VerifiedCapabilityRequired = true
 	t.Cleanup(func() { common.Image2VerifiedCapabilityRequired = old })

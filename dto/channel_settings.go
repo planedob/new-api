@@ -16,23 +16,22 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
-	// Image2Capability is an opt-in declaration used by the Image2 smart
-	// router. It deliberately describes capabilities instead of channel IDs so
-	// operators can change upstreams without a code deployment.
+	// Image2Capability contains controlled-test or legacy observed capability.
+	// It is used as a fallback only when the supplier declaration is absent.
 	Image2Capability *Image2ChannelCapability `json:"image2_capability,omitempty"`
-	// Image2DeclaredCapability records what the supplier or operator claims.
-	// It is intentionally never consumed by routing.  Only a capability backed
-	// by a current verification record may become authoritative in strict mode.
+	// Image2DeclaredCapability records the supplier capability statement and is
+	// the primary smart-routing contract. Tests supplement a missing statement
+	// and detect operational conflicts; they are not mandatory for every
+	// declared combination.
 	Image2DeclaredCapability *Image2ChannelCapability `json:"image2_declared_capability,omitempty"`
-	// Image2CapabilityVerification binds the effective capability above to
-	// controlled test evidence.  Keeping declaration and verification separate
-	// prevents an optimistic supplier claim from becoming routable by itself.
+	// Image2CapabilityVerification binds the tested fallback capability above to
+	// controlled evidence when no supplier declaration is available.
 	Image2CapabilityVerification *Image2CapabilityVerification `json:"image2_capability_verification,omitempty"`
 }
 
-// Image2ChannelCapability describes the effective Image2 request shapes an
-// upstream can safely accept. In strict mode it must be bound to controlled
-// test evidence. RoutePriority is not a price, channel priority, or weight.
+// Image2ChannelCapability describes Image2 request shapes. The same shape is
+// used for a supplier declaration and for test-derived fallback data.
+// RoutePriority is not a price, channel priority, or weight.
 type Image2ChannelCapability struct {
 	Enabled     bool     `json:"enabled,omitempty"`
 	Operations  []string `json:"operations,omitempty"`  // generations, edits

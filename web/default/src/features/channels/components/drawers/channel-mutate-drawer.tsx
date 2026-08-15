@@ -383,18 +383,32 @@ export function ChannelMutateDrawer({
   const currentSettings = form.watch('settings')
   const currentChannelSetting = form.watch('setting')
   const image2RoutingStatus = useMemo(() => {
-    if (!currentChannelSetting) return null
+    const image2Models = Array.isArray(currentModels)
+      ? currentModels
+      : String(currentModels || '').split(',')
+    const hasImage2Model = image2Models.some(
+      (model: string) => model.trim() === 'gpt-image-2'
+    )
+    const missing = {
+      declared: undefined,
+      capability: undefined,
+      verification: undefined,
+      missing: true,
+    }
+    if (!currentChannelSetting) return hasImage2Model ? missing : null
     try {
       const parsed = JSON.parse(currentChannelSetting)
       const declared = parsed.image2_declared_capability
       const capability = parsed.image2_capability
       const verification = parsed.image2_capability_verification
-      if (!declared && !capability && !verification) return null
+      if (!declared && !capability && !verification) {
+        return hasImage2Model ? missing : null
+      }
       return { declared, capability, verification }
     } catch {
       return { invalid: true }
     }
-  }, [currentChannelSetting])
+  }, [currentChannelSetting, currentModels])
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -3045,12 +3059,20 @@ export function ChannelMutateDrawer({
                             ) : (
                               <>
                                 <div>
-                                  {t('实测状态')}：
-                                  {image2RoutingStatus.verification?.status ||
-                                    t('未验证，不应加入严格智能路由')}
+                                  {t('当前路由依据')}：
+                                  {image2RoutingStatus.declared
+                                    ? t('供应商能力说明')
+                                    : image2RoutingStatus.capability
+                                      ? t('实测或历史能力补位')
+                                      : t('无能力依据')}
                                 </div>
                                 <div>
-                                  {t('有效能力')}：
+                                  {t('组合实测状态')}：
+                                  {image2RoutingStatus.verification?.status ||
+                                    t('未提供；不阻断有效供应商声明')}
+                                </div>
+                                <div>
+                                  {t('实测补位组合')}：
                                   {image2RoutingStatus.capability?.profiles
                                     ?.map(
                                       (profile: {
@@ -3064,7 +3086,13 @@ export function ChannelMutateDrawer({
                                     .join('；') || t('无已验证组合')}
                                 </div>
                                 <div>
-                                  {t('供应商声明仅供对照，不直接参与路由')}
+                                  {image2RoutingStatus.declared
+                                    ? t(
+                                        '供应商声明参与路由；实测用于补缺、冲突复核和稳定性抽检'
+                                      )
+                                    : t(
+                                        '供应商能力说明缺失：请补充官方说明；无法取得时再安排能力测试'
+                                      )}
                                 </div>
                               </>
                             )}

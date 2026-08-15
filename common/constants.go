@@ -168,9 +168,9 @@ var Image2SmartRoutingEnabled = false
 // capabilities have been migrated and accepted.
 var Image2EditsSmartRoutingEnabled = false
 
-// Image2VerifiedCapabilityRequired makes controlled test evidence mandatory
-// for capability routing. It ships disabled so an existing installation can
-// migrate channel evidence before enabling the stricter selection policy.
+// Image2VerifiedCapabilityRequired makes controlled evidence mandatory for a
+// test-derived fallback when the supplier published no capability statement.
+// Supplier-declared capability remains the primary routing contract.
 var Image2VerifiedCapabilityRequired = false
 
 // EntitlementFeatureEnabled gates the directed entitlement enforcement path.

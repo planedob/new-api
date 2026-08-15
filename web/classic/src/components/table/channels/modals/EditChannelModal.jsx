@@ -222,11 +222,20 @@ const EditChannelModal = (props) => {
   const [autoBan, setAutoBan] = useState(true);
   const [inputs, setInputs] = useState(originInputs);
   const image2RoutingStatus = useMemo(() => {
-    if (!inputs.setting) return null;
+    const hasImage2Model = (inputs.models || []).some(
+      (model) => String(model || '').trim() === 'gpt-image-2',
+    );
+    const missing = {
+      declared: undefined,
+      capability: undefined,
+      verification: undefined,
+      missing: true,
+    };
+    if (!inputs.setting) return hasImage2Model ? missing : null;
     try {
       const parsed = JSON.parse(inputs.setting);
       if (!parsed.image2_declared_capability && !parsed.image2_capability && !parsed.image2_capability_verification) {
-        return null;
+        return hasImage2Model ? missing : null;
       }
       return {
         declared: parsed.image2_declared_capability,
@@ -236,7 +245,7 @@ const EditChannelModal = (props) => {
     } catch {
       return { invalid: true };
     }
-  }, [inputs.setting]);
+  }, [inputs.setting, inputs.models]);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
   const [groupOptions, setGroupOptions] = useState([]);
@@ -2562,9 +2571,10 @@ const EditChannelModal = (props) => {
                       description={image2RoutingStatus.invalid ? t('渠道设置 JSON 无效，保存前必须修复') : (
                         <div>
                           <div className='font-medium'>{t('Image2 智能路由能力（只读）')}</div>
-                          <div>{t('实测状态')}：{image2RoutingStatus.verification?.status || t('未验证，不应加入严格智能路由')}</div>
-                          <div>{t('有效能力')}：{image2RoutingStatus.capability?.profiles?.map((profile) => `${profile.operation}/${profile.resolution}/${profile.quality}/n≤${profile.max_n}`).join('；') || t('无已验证组合')}</div>
-                          <div>{t('供应商声明仅供对照，不直接参与路由')}</div>
+                          <div>{t('当前路由依据')}：{image2RoutingStatus.declared ? t('供应商能力说明') : image2RoutingStatus.capability ? t('实测或历史能力补位') : t('无能力依据')}</div>
+                          <div>{t('组合实测状态')}：{image2RoutingStatus.verification?.status || t('未提供；不阻断有效供应商声明')}</div>
+                          <div>{t('实测补位组合')}：{image2RoutingStatus.capability?.profiles?.map((profile) => `${profile.operation}/${profile.resolution}/${profile.quality}/n≤${profile.max_n}`).join('；') || t('无实测补位组合')}</div>
+                          <div>{image2RoutingStatus.declared ? t('供应商声明参与路由；实测用于补缺、冲突复核和稳定性抽检') : t('供应商能力说明缺失：请补充官方说明；无法取得时再安排能力测试')}</div>
                         </div>
                       )}
                     />
