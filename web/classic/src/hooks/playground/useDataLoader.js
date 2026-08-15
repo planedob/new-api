@@ -33,9 +33,11 @@ export const useDataLoader = (
   handleInputChange,
   setModels,
   setGroups,
+  setImage2Capability,
 ) => {
   const { t } = useTranslation();
   const latestModelRequestRef = useRef(0);
+  const latestImage2CapabilityRequestRef = useRef(0);
 
   const loadModels = useCallback(async () => {
     const requestId = ++latestModelRequestRef.current;
@@ -95,16 +97,41 @@ export const useDataLoader = (
     }
   }, [userState, inputs.group, handleInputChange, setGroups, t]);
 
+  const loadImage2Capability = useCallback(async () => {
+    const requestId = ++latestImage2CapabilityRequestRef.current;
+    if (!/^gpt-image-2(?:$|[-_.])/i.test(String(inputs.model || '').trim())) {
+      setImage2Capability(null);
+      return;
+    }
+    try {
+      const res = await API.get('/api/user/image2/capabilities', {
+        params: { group: inputs.group, model: inputs.model },
+      });
+      if (requestId !== latestImage2CapabilityRequestRef.current) return;
+      if (res.data?.success && res.data?.data) {
+        setImage2Capability(res.data.data);
+      } else {
+        setImage2Capability(null);
+      }
+    } catch (error) {
+      if (requestId === latestImage2CapabilityRequestRef.current) {
+        setImage2Capability(null);
+      }
+    }
+  }, [inputs.group, inputs.model, setImage2Capability]);
+
   // 自动加载数据
   useEffect(() => {
     if (userState?.user) {
       loadModels();
       loadGroups();
+      loadImage2Capability();
     }
-  }, [userState?.user, loadModels, loadGroups]);
+  }, [userState?.user, loadModels, loadGroups, loadImage2Capability]);
 
   return {
     loadModels,
     loadGroups,
+    loadImage2Capability,
   };
 };

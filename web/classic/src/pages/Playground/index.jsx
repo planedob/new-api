@@ -137,6 +137,7 @@ const Playground = () => {
     showSettings,
     models,
     groups,
+    image2Capability,
     status,
     message,
     debugData,
@@ -173,7 +174,14 @@ const Playground = () => {
   );
 
   // 数据加载
-  useDataLoader(userState, inputs, handleInputChange, setModels, setGroups);
+  useDataLoader(
+    userState,
+    inputs,
+    handleInputChange,
+    setModels,
+    setGroups,
+    setImage2Capability,
+  );
 
   // 消息编辑
   const {
@@ -382,12 +390,16 @@ const Playground = () => {
           sendRequest(formData, false, {
             endpoint: API_ENDPOINTS.IMAGE_EDITS,
             responseType: 'image',
+            asyncImage2: true,
+            image2Operation: 'edits',
           });
         } else {
           const payload = buildImagePayload(inputs, content);
           sendRequest(payload, false, {
             endpoint: API_ENDPOINTS.IMAGE_GENERATIONS,
             responseType: 'image',
+            asyncImage2: true,
+            image2Operation: 'generations',
           });
         }
       } catch (error) {
@@ -629,6 +641,7 @@ const Playground = () => {
                 onCustomRequestBodyChange={setCustomRequestBody}
                 previewPayload={previewPayload}
                 messages={message}
+                image2Capability={image2Capability}
               />
             </Layout.Sider>
           )}

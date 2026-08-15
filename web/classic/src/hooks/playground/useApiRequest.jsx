@@ -58,6 +58,55 @@ const getDebugBody = (body) => {
   return fields;
 };
 
+// Image2 requests can legitimately exceed a reverse-proxy request timeout.
+// Submit exactly once to the bounded server-side job endpoint, then poll the
+// read-only job resource. A poll timeout is surfaced with the job ID; it never
+// submits the image request again and therefore cannot duplicate billing.
+const fetchImage2Job = async (payload, operation, headers) => {
+  const idempotencyKey =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const accepted = await fetch(`/pg/images/jobs/${operation}`, {
+    method: 'POST',
+    headers: { ...headers, 'X-Image2-Idempotency-Key': idempotencyKey },
+    body:
+      typeof FormData !== 'undefined' && payload instanceof FormData
+        ? payload
+        : JSON.stringify(payload),
+  });
+  if (!accepted.ok) return accepted;
+
+  let job = await accepted.json();
+  const deadline = Date.now() + 15 * 60 * 1000;
+  while (job?.status === 'processing' || !job?.status) {
+    if (Date.now() >= deadline) {
+      const timeoutError = new Error(
+        `Image2 job ${job?.id || 'unknown'} is still processing; keep the job ID and poll it again.`,
+      );
+      timeoutError.errorCode = 'image2_async_poll_timeout';
+      throw timeoutError;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const pollResponse = await fetch(
+      job.poll_url || `/pg/images/jobs/${job.id}`,
+      { method: 'GET', headers },
+    );
+    if (!pollResponse.ok) return pollResponse;
+    job = await pollResponse.json();
+  }
+
+  const status =
+    Number(job.http_status) || (job.status === 'succeeded' ? 200 : 500);
+  return new Response(JSON.stringify(job.response || {}), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(job.request_id ? { 'X-Oneapi-Request-Id': job.request_id } : {}),
+    },
+  });
+};
+
 export const useApiRequest = (
   setMessage,
   setDebugData,
@@ -226,11 +275,20 @@ export const useApiRequest = (
           headers['Content-Type'] = 'application/json';
         }
 
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers,
-          body: isMultipart ? payload : JSON.stringify(payload),
-        });
+        const response = options.asyncImage2
+          ? await fetchImage2Job(
+              payload,
+              options.image2Operation ||
+                (endpoint === API_ENDPOINTS.IMAGE_EDITS
+                  ? 'edits'
+                  : 'generations'),
+              headers,
+            )
+          : await fetch(endpoint, {
+              method: 'POST',
+              headers,
+              body: isMultipart ? payload : JSON.stringify(payload),
+            });
 
         if (!response.ok) {
           let errorBody = '';
@@ -270,15 +328,26 @@ export const useApiRequest = (
         }
 
         const data = await response.json();
+        const requestId = response.headers.get('X-Oneapi-Request-Id');
 
         setDebugData((prev) => ({
           ...prev,
-          response: JSON.stringify(data, null, 2),
+          response: JSON.stringify(
+            requestId ? { request_id: requestId, response: data } : data,
+            null,
+            2,
+          ),
         }));
         setActiveDebugTab(DEBUG_TABS.RESPONSE);
 
         if (options.responseType === 'image') {
-          const content = getImageResponseContent(data);
+          const imageContent = getImageResponseContent(data);
+          const content = [
+            imageContent,
+            requestId ? `Request ID: \`${requestId}\`` : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n');
           setMessage((prevMessage) => {
             const newMessages = [...prevMessage];
             const lastMessage = newMessages[newMessages.length - 1];

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
-var group2model2channels map[string]map[string][]int // enabled channel
+var group2model2channels map[string]map[string][]int // enabled channel + ability
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
 
@@ -36,32 +35,19 @@ func InitChannelCache() {
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
-	groups := make(map[string]bool)
-	for _, ability := range abilities {
-		groups[ability.Group] = true
-	}
 	newGroup2model2channels := make(map[string]map[string][]int)
-	for group := range groups {
-		newGroup2model2channels[group] = make(map[string][]int)
-	}
-	for _, channel := range channels {
-		if channel.Status != common.ChannelStatusEnabled {
-			continue // skip disabled channels
+	for _, ability := range abilities {
+		if !ability.Enabled {
+			continue
 		}
-		groups := strings.Split(channel.Group, ",")
-		for _, group := range groups {
-			// Channel groups and abilities are normally updated together. Keep the
-			// cache builder resilient during an in-flight change or a partially
-			// repaired database: a new channel group must not make a process restart
-			// panic simply because its ability rows are not visible yet.
-			ensureChannelCacheGroup(newGroup2model2channels, group)
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
-			}
+		channel, ok := newChannelId2channel[ability.ChannelId]
+		if !ok || channel.Status != common.ChannelStatusEnabled {
+			continue // both channel and ability must be enabled for legacy selection
+		}
+		ensureChannelCacheGroup(newGroup2model2channels, ability.Group)
+		modelChannels := newGroup2model2channels[ability.Group][ability.Model]
+		if !containsChannelID(modelChannels, channel.Id) {
+			newGroup2model2channels[ability.Group][ability.Model] = append(modelChannels, channel.Id)
 		}
 	}
 
@@ -129,6 +115,10 @@ func GetRandomSatisfiedChannelWithPolicy(group string, model string, retry int, 
 		channels = group2model2channels[group][normalizedModel]
 	}
 
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	channels = filterSelectableCachedChannels(channels, channelsIDM)
 	if len(channels) == 0 {
 		return nil, nil
 	}
@@ -233,6 +223,10 @@ func GetRandomSatisfiedChannelExcluding(group string, model string, excluded map
 	if len(channels) == 0 {
 		return nil, nil
 	}
+	channels = filterSelectableCachedChannels(channels, channelsIDM)
+	if len(channels) == 0 {
+		return nil, nil
+	}
 
 	var targetPriority int64
 	targetPrioritySet := false
@@ -322,19 +316,111 @@ func CacheUpdateChannelStatus(id int, status int) {
 		channel.Status = status
 	}
 	if status != common.ChannelStatusEnabled {
-		// delete the channel from group2model2channels
-		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
-						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
-						break
-					}
-				}
-			}
+		removeChannelIDFromCacheLocked(id)
+	}
+}
+
+// CacheUpdateAbilityStatus keeps the legacy in-memory selector aligned with
+// the per-group/model ability rows. A stale cache entry is not allowed to
+// select a disabled ability, even when the backing channel itself is enabled.
+// The capability-aware Image2 path intentionally uses GetImage2Channels and
+// remains able to explain disabled candidates as a 503.
+func CacheUpdateAbilityStatus(channelID int) {
+	if !common.MemoryCacheEnabled || DB == nil {
+		return
+	}
+	var enabledAbilities []Ability
+	if err := DB.Where("channel_id = ? and enabled = ?", channelID, true).Find(&enabledAbilities).Error; err != nil {
+		// A failed refresh must fail closed for the legacy selector.
+		channelSyncLock.Lock()
+		removeChannelIDFromCacheLocked(channelID)
+		channelSyncLock.Unlock()
+		return
+	}
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	if group2model2channels == nil {
+		group2model2channels = make(map[string]map[string][]int)
+	}
+	removeChannelIDFromCacheLocked(channelID)
+	channel, ok := channelsIDM[channelID]
+	if !ok || !isSelectableChannelStatus(channel.Status) {
+		return
+	}
+	for _, ability := range enabledAbilities {
+		ensureChannelCacheGroup(group2model2channels, ability.Group)
+		modelChannels := group2model2channels[ability.Group][ability.Model]
+		if !containsChannelID(modelChannels, channelID) {
+			group2model2channels[ability.Group][ability.Model] = append(modelChannels, channelID)
 		}
 	}
+	for _, model2channels := range group2model2channels {
+		for model, channelIDs := range model2channels {
+			sort.SliceStable(channelIDs, func(i, j int) bool {
+				left, leftOK := channelsIDM[channelIDs[i]]
+				right, rightOK := channelsIDM[channelIDs[j]]
+				if !leftOK || !rightOK {
+					return channelIDs[i] < channelIDs[j]
+				}
+				if left.GetPriority() != right.GetPriority() {
+					return left.GetPriority() > right.GetPriority()
+				}
+				return channelIDs[i] < channelIDs[j]
+			})
+			model2channels[model] = channelIDs
+		}
+	}
+}
+
+func removeChannelIDFromCacheLocked(id int) {
+	for group, model2channels := range group2model2channels {
+		for model, channelIDs := range model2channels {
+			filtered := channelIDs[:0]
+			for _, channelID := range channelIDs {
+				if channelID != id {
+					filtered = append(filtered, channelID)
+				}
+			}
+			if len(filtered) == 0 {
+				delete(model2channels, model)
+			} else {
+				model2channels[model] = filtered
+			}
+		}
+		if len(model2channels) == 0 {
+			delete(group2model2channels, group)
+		}
+	}
+}
+
+func containsChannelID(channelIDs []int, channelID int) bool {
+	for _, candidate := range channelIDs {
+		if candidate == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+func isSelectableChannelStatus(status int) bool {
+	// Status zero is the zero value used by isolated selector tests and is
+	// treated as unknown/eligible. Persisted channels use 1 for enabled and
+	// 2/3 for manual/automatic disablement, both of which must be excluded.
+	return status == 0 || status == common.ChannelStatusEnabled
+}
+
+func filterSelectableCachedChannels(channelIDs []int, cached map[int]*Channel) []int {
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		channel, ok := cached[channelID]
+		if !ok {
+			continue
+		}
+		if isSelectableChannelStatus(channel.Status) {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered
 }
 
 func CacheUpdateChannel(channel *Channel) {

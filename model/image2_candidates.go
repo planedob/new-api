@@ -26,6 +26,9 @@ func GetSatisfiedChannels(group string, modelName string) ([]*Channel, error) {
 			if !ok {
 				return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", id)
 			}
+			if !isSelectableChannelStatus(channel.Status) {
+				continue
+			}
 			channels = append(channels, channel)
 		}
 		return channels, nil

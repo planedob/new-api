@@ -159,6 +159,9 @@ func GetChannelWithPolicy(group string, model string, retry int, stopAtExhaustio
 		return nil, nil
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
+	if err == nil && channel.Status != common.ChannelStatusEnabled {
+		return nil, nil
+	}
 	return &channel, err
 }
 
@@ -218,6 +221,9 @@ func GetChannelExcluding(group string, model string, excluded map[int]struct{}) 
 
 	channel := Channel{}
 	err = DB.First(&channel, "id = ?", channelID).Error
+	if err == nil && channel.Status != common.ChannelStatusEnabled {
+		return nil, nil
+	}
 	return &channel, err
 }
 
@@ -339,11 +345,22 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 }
 
 func UpdateAbilityStatus(channelId int, status bool) error {
-	return DB.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", status).Error
+	err := DB.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", status).Error
+	if err == nil {
+		CacheUpdateAbilityStatus(channelId)
+	}
+	return err
 }
 
 func UpdateAbilityStatusByTag(tag string, status bool) error {
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
+	err := DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
+	if err == nil {
+		// Tag operations can affect several group/model rows at once. Rebuild the
+		// in-memory selector before returning so a disabled ability cannot be
+		// selected during the window before the controller's normal refresh.
+		InitChannelCache()
+	}
+	return err
 }
 
 func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uint) error {

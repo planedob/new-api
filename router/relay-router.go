@@ -68,6 +68,21 @@ func SetRelayRouter(router *gin.Engine) {
 		playgroundRouter.POST("/images/generations", controller.Playground)
 		playgroundRouter.POST("/images/edits", controller.Playground)
 	}
+	// Image2 asynchronous delivery deliberately has its own middleware group:
+	// the submit handler snapshots the authenticated request and runs the
+	// existing Playground relay once in a detached context, while polling is a
+	// read-only user-scoped lookup and must not invoke Distribute/channel select.
+	image2JobRouter := router.Group("/pg/images/jobs")
+	image2JobRouter.Use(middleware.RouteTag("relay"))
+	image2JobRouter.Use(middleware.SystemPerformanceCheck())
+	image2JobRouter.Use(middleware.UserAuth())
+	{
+		// Submit needs the same group/entitlement/channel context as the
+		// synchronous Playground route. Polling remains Distribute-free and
+		// therefore cannot select a channel or charge a second request.
+		image2JobRouter.POST("/:operation", middleware.Distribute(), controller.SubmitImage2Job)
+		image2JobRouter.GET("/:id", controller.GetImage2Job)
+	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())

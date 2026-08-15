@@ -88,6 +88,46 @@ export interface ChatCompletionResponse {
   }
 }
 
+export type Image2Mode = 'generations' | 'edits'
+
+export interface Image2Request {
+  model: string
+  group: string
+  prompt: string
+  size?: string
+  quality?: string
+  n: number
+}
+
+export interface Image2Response {
+  data?: Array<{
+    url?: string
+    b64_json?: string
+  }>
+}
+
+export interface Image2CapabilityOption {
+  operation: Image2Mode
+  size: string
+  quality: 'auto' | 'standard' | 'high'
+  max_n: number
+}
+
+export interface Image2CapabilityCatalog {
+  model: string
+  group: string
+  operations: Image2Mode[]
+  profiles: Image2CapabilityOption[]
+  max_n: number
+}
+
+export interface Image2Result {
+  mode: Image2Mode
+  requestId: string | null
+  images: string[]
+  error: string | null
+}
+
 // Configuration types
 export interface PlaygroundConfig {
   model: string

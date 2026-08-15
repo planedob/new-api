@@ -47,6 +47,7 @@ const SettingsPanel = ({
   onCustomRequestBodyChange,
   previewPayload,
   messages,
+  image2Capability,
 }) => {
   const { t } = useTranslation();
 
@@ -203,6 +204,7 @@ const SettingsPanel = ({
             inputs={inputs}
             onInputChange={onInputChange}
             disabled={customRequestMode}
+            capability={image2Capability}
           />
         ) : (
           <div className={customRequestMode ? 'opacity-50' : ''}>

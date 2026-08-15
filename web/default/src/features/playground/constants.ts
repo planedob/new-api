@@ -17,8 +17,12 @@ export const MESSAGE_STATUS = {
 // API endpoints
 export const API_ENDPOINTS = {
   CHAT_COMPLETIONS: '/pg/chat/completions',
+  IMAGE_GENERATIONS: '/pg/images/generations',
+  IMAGE_EDITS: '/pg/images/edits',
+  IMAGE2_JOBS: '/pg/images/jobs',
   USER_MODELS: '/api/user/models',
   USER_GROUPS: '/api/user/self/groups',
+  IMAGE2_CAPABILITIES: '/api/user/image2/capabilities',
 } as const
 
 // Default group

@@ -17,13 +17,59 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { InputNumber, Select, Typography } from '@douyinfe/semi-ui';
 import { Image, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import {
+  image2DefaultSelection,
+  image2MaxN,
+  image2Qualities,
+  image2Sizes,
+  isImage2SelectionSupported,
+} from '../../helpers/image2Capabilities';
 
-const ImageRequestControls = ({ inputs, onInputChange, disabled = false }) => {
+const ImageRequestControls = ({
+  inputs,
+  onInputChange,
+  disabled = false,
+  capability,
+}) => {
   const { t } = useTranslation();
+  const operation =
+    inputs.imageEnabled &&
+    (inputs.imageUrls || []).some((url) => String(url).trim() !== '')
+      ? 'edits'
+      : 'generations';
+  const sizes = image2Sizes(capability, operation);
+  const size = inputs.imageSize;
+  const quality = inputs.imageQuality;
+  const qualities = image2Qualities(capability, operation, size);
+  const maxN = image2MaxN(capability, operation, size, quality);
+  const ready = isImage2SelectionSupported(
+    capability,
+    operation,
+    size,
+    quality,
+    inputs.imageN,
+  );
+
+  useEffect(() => {
+    const defaults = image2DefaultSelection(capability, operation);
+    if (!defaults) return;
+    const nextSizes = image2Sizes(capability, operation);
+    const nextQualities = image2Qualities(capability, operation, size);
+    if (!nextSizes.includes(size) || !nextQualities.includes(quality)) {
+      onInputChange('imageSize', defaults.size);
+      onInputChange('imageQuality', defaults.quality);
+      onInputChange('imageN', defaults.n);
+      return;
+    }
+    const nextMaxN = image2MaxN(capability, operation, size, quality);
+    if (nextMaxN > 0 && Number(inputs.imageN) > nextMaxN) {
+      onInputChange('imageN', nextMaxN);
+    }
+  }, [capability, operation, size, quality, inputs.imageN, onInputChange]);
 
   return (
     <div className={`space-y-4 ${disabled ? 'opacity-50' : ''}`}>
@@ -34,9 +80,9 @@ const ImageRequestControls = ({ inputs, onInputChange, disabled = false }) => {
         </Typography.Text>
       </div>
       <Typography.Text className='text-xs text-gray-500 block'>
-        {t(
-          'Image2 生成使用 /images/generations；粘贴参考图后使用 /images/edits。',
-        )}
+        {ready
+          ? t('选项来自当前分组能力；不会把 auto 静默升级为 4K。')
+          : t('当前组合不可用，请等待能力加载或修改参数。')}
       </Typography.Text>
 
       <div>
@@ -49,14 +95,9 @@ const ImageRequestControls = ({ inputs, onInputChange, disabled = false }) => {
         <Select
           value={inputs.imageQuality}
           onChange={(value) => onInputChange('imageQuality', value)}
-          optionList={[
-            { label: 'auto', value: 'auto' },
-            { label: 'low', value: 'low' },
-            { label: 'medium', value: 'medium' },
-            { label: 'high', value: 'high' },
-          ]}
+          optionList={[...qualities.map((value) => ({ label: value, value }))]}
           style={{ width: '100%' }}
-          disabled={disabled}
+          disabled={disabled || !capability || !ready}
         />
       </div>
 
@@ -67,17 +108,9 @@ const ImageRequestControls = ({ inputs, onInputChange, disabled = false }) => {
         <Select
           value={inputs.imageSize}
           onChange={(value) => onInputChange('imageSize', value)}
-          optionList={[
-            { label: 'auto', value: 'auto' },
-            { label: '1024x1024', value: '1024x1024' },
-            { label: '1536x1024', value: '1536x1024' },
-            { label: '1024x1536', value: '1024x1536' },
-            { label: '3840x2160 (4K)', value: '3840x2160' },
-            { label: '2160x3840 (4K)', value: '2160x3840' },
-            { label: '4096x4096', value: '4096x4096' },
-          ]}
+          optionList={[...sizes.map((value) => ({ label: value, value }))]}
           style={{ width: '100%' }}
-          disabled={disabled}
+          disabled={disabled || !capability || !ready}
         />
       </div>
 
@@ -89,10 +122,10 @@ const ImageRequestControls = ({ inputs, onInputChange, disabled = false }) => {
           value={inputs.imageN}
           onNumberChange={(value) => onInputChange('imageN', value || 1)}
           min={1}
-          max={4}
+          max={maxN || 1}
           precision={0}
           style={{ width: '100%' }}
-          disabled={disabled}
+          disabled={disabled || !capability || !ready}
         />
       </div>
     </div>

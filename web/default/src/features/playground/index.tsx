@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { toast } from 'sonner'
-import { getUserModels, getUserGroups } from './api'
+import { getImage2Capabilities, getUserModels, getUserGroups } from './api'
+import { Image2Playground } from './components/image2-playground'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
 import { DEFAULT_GROUP } from './constants'
@@ -45,6 +45,14 @@ export function Playground() {
     queryFn: getUserGroups,
   })
 
+  const isImage2Model = /^gpt-image-2(?:$|[-_.])/i.test(config.model.trim())
+  const { data: image2Capability } = useQuery({
+    queryKey: ['playground-image2-capabilities', config.group, config.model],
+    queryFn: () => getImage2Capabilities(config.group, config.model),
+    enabled: isImage2Model,
+    retry: false,
+  })
+
   // Update models when data changes
   useEffect(() => {
     if (!modelsData) return
@@ -80,13 +88,6 @@ export function Playground() {
   }, [groupsData, setGroups])
 
   const handleSendMessage = (text: string) => {
-    if (/^gpt-image-2(?:$|[-_.])/i.test(config.model.trim())) {
-      toast.error(
-        'GPT Image 2 must use the image generation or edit endpoint. This Playground view is not ready for Image2 yet.'
-      )
-      return
-    }
-
     const userMessage = createUserMessage(text)
     const assistantMessage = createLoadingAssistantMessage()
 
@@ -162,38 +163,50 @@ export function Playground() {
 
   return (
     <div className='relative flex size-full flex-col overflow-hidden'>
-      {/* Full-width scroll container: scrolling works even over side whitespace */}
-      <div className='flex flex-1 flex-col overflow-hidden'>
-        <PlaygroundChat
-          messages={messages}
-          onCopyMessage={handleCopyMessage}
-          onRegenerateMessage={handleRegenerateMessage}
-          onEditMessage={handleEditMessage}
-          onDeleteMessage={handleDeleteMessage}
-          isGenerating={isGenerating}
-          editingKey={editingMessageKey}
-          onCancelEdit={handleEditOpenChange}
-          onSaveEdit={(newContent) => applyEdit(newContent, false)}
-          onSaveEditAndSubmit={(newContent) => applyEdit(newContent, true)}
-        />
-      </div>
-
-      {/* Input area: center content and constrain to the same container width */}
-      <div className='mx-auto w-full max-w-4xl'>
-        <PlaygroundInput
-          disabled={isGenerating}
-          groups={groups}
+      {isImage2Model ? (
+        <Image2Playground
+          disabled={isGenerating || isLoadingModels}
           groupValue={config.group}
-          isGenerating={isGenerating}
-          isModelLoading={isLoadingModels}
+          groups={groups}
           modelValue={config.model}
           models={models}
           onGroupChange={(value) => updateConfig('group', value)}
           onModelChange={(value) => updateConfig('model', value)}
-          onStop={stopGeneration}
-          onSubmit={handleSendMessage}
+          capability={image2Capability}
         />
-      </div>
+      ) : (
+        <>
+          <div className='flex flex-1 flex-col overflow-hidden'>
+            <PlaygroundChat
+              messages={messages}
+              onCopyMessage={handleCopyMessage}
+              onRegenerateMessage={handleRegenerateMessage}
+              onEditMessage={handleEditMessage}
+              onDeleteMessage={handleDeleteMessage}
+              isGenerating={isGenerating}
+              editingKey={editingMessageKey}
+              onCancelEdit={handleEditOpenChange}
+              onSaveEdit={(newContent) => applyEdit(newContent, false)}
+              onSaveEditAndSubmit={(newContent) => applyEdit(newContent, true)}
+            />
+          </div>
+          <div className='mx-auto w-full max-w-4xl'>
+            <PlaygroundInput
+              disabled={isGenerating}
+              groups={groups}
+              groupValue={config.group}
+              isGenerating={isGenerating}
+              isModelLoading={isLoadingModels}
+              modelValue={config.model}
+              models={models}
+              onGroupChange={(value) => updateConfig('group', value)}
+              onModelChange={(value) => updateConfig('model', value)}
+              onStop={stopGeneration}
+              onSubmit={handleSendMessage}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }
