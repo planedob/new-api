@@ -1,6 +1,7 @@
 package router
 
 import (
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
@@ -11,6 +12,12 @@ import (
 )
 
 func SetRelayRouter(router *gin.Engine) {
+	// Reconcile durable Image2 jobs before accepting a new submit/poll. The
+	// controller repeats this check lazily, so a test/router constructed before
+	// DB initialization remains a safe no-op.
+	if err := controller.RecoverImage2AsyncJobsOnStartup(); err != nil {
+		common.SysError("Image2 async schema preflight failed: " + err.Error())
+	}
 	router.Use(middleware.CORS())
 	router.Use(middleware.DecompressRequestMiddleware())
 	router.Use(middleware.BodyStorageCleanup()) // 清理请求体存储

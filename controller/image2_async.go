@@ -4,38 +4,29 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const (
 	image2AsyncJobTTL        = 30 * time.Minute
 	image2AsyncJobMaxCount   = 128
 	image2AsyncJobMaxRuntime = 15 * time.Minute
+	image2AsyncJobLeaseGrace = 1 * time.Minute
 )
 
-type image2AsyncJob struct {
-	id             string
-	idempotencyKey string
-	userID         int
-	operation      string
-	requestID      string
-	createdAt      time.Time
-	finishedAt     time.Time
-	status         string
-	httpStatus     int
-	responseBody   []byte
-	responseHeader http.Header
-}
-
+// image2AsyncJobSnapshot is the customer-facing subset of the durable model.
+// Request bodies, lease owners, and idempotency keys never leave the server.
 type image2AsyncJobSnapshot struct {
 	ID         string
 	Operation  string
@@ -47,14 +38,11 @@ type image2AsyncJobSnapshot struct {
 	Response   []byte
 }
 
-var image2AsyncJobs = struct {
-	sync.Mutex
-	byID          map[string]*image2AsyncJob
-	byIdempotency map[string]string
-}{
-	byID:          make(map[string]*image2AsyncJob),
-	byIdempotency: make(map[string]string),
-}
+// The lease owner is unique per process. It is used only in the conditional
+// completion update; a second node cannot complete or replay another node's
+// running job. The request body remains in the submit goroutine's memory and is
+// deliberately absent from the database.
+var image2AsyncLeaseOwner = "image2-async-" + uuid.NewString()
 
 // SubmitImage2Job accepts exactly one image request and executes the existing
 // relay once in a detached server-side context. The client receives a job ID
@@ -79,6 +67,42 @@ func SubmitImage2Job(c *gin.Context) {
 		}})
 		return
 	}
+	if err := model.CheckImage2AsyncJobSchema(); err != nil {
+		writeImage2AsyncStoreUnavailable(c)
+		return
+	}
+
+	// Recovery and cleanup are bounded and lazy. This also lets a node that was
+	// restarted between requests reconcile stale leases without replaying them.
+	_ = recoverAndPruneImage2AsyncJobs()
+
+	userID := c.GetInt("id")
+	requestID := strings.TrimSpace(c.GetString(common.RequestIdKey))
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	scopeKey := image2AsyncIdempotencyKey(userID, operation, idempotencyKey)
+	if existing, err := model.GetImage2AsyncJobByScope(scopeKey); err == nil {
+		writeImage2AsyncJobAccepted(c, snapshotImage2AsyncJob(existing))
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		writeImage2AsyncStoreUnavailable(c)
+		return
+	}
+
+	activeCount, err := model.CountActiveImage2AsyncJobs(time.Now().UTC())
+	if err != nil {
+		writeImage2AsyncStoreUnavailable(c)
+		return
+	}
+	if activeCount >= image2AsyncJobMaxCount {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": map[string]any{
+			"message": "Image2 asynchronous delivery queue is full; try again later",
+			"type":    "server_error",
+			"code":    "image2_async_queue_full",
+		}})
+		return
+	}
 
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
@@ -99,46 +123,28 @@ func SubmitImage2Job(c *gin.Context) {
 		return
 	}
 	bodyCopy := append([]byte(nil), body...)
-	userID := c.GetInt("id")
-	requestID := strings.TrimSpace(c.GetString(common.RequestIdKey))
-	if requestID == "" {
-		requestID = uuid.NewString()
+	createdAt := time.Now().UTC()
+	job := &model.Image2AsyncJob{
+		ID:             uuid.NewString(),
+		ScopeKey:       scopeKey,
+		IdempotencyKey: idempotencyKey,
+		UserID:         userID,
+		Operation:      operation,
+		RequestID:      requestID,
+		Status:         model.Image2AsyncJobStatusPending,
+		CreatedAt:      createdAt,
+		ExpiresAt:      createdAt.Add(image2AsyncJobTTL),
 	}
-	key := image2AsyncIdempotencyKey(userID, operation, idempotencyKey)
-
-	image2AsyncJobs.Lock()
-	pruneImage2AsyncJobsLocked(time.Now())
-	if existingID := image2AsyncJobs.byIdempotency[key]; existingID != "" {
-		if existing := image2AsyncJobs.byID[existingID]; existing != nil {
-			snapshot := snapshotImage2AsyncJob(existing)
-			image2AsyncJobs.Unlock()
-			writeImage2AsyncJobAccepted(c, snapshot)
+	if err := model.CreateImage2AsyncJob(job); err != nil {
+		// A concurrent submit on another node may have won the unique scope. In
+		// that case return the existing job and never start a second relay.
+		if existing, lookupErr := model.GetImage2AsyncJobByScope(scopeKey); lookupErr == nil {
+			writeImage2AsyncJobAccepted(c, snapshotImage2AsyncJob(existing))
 			return
 		}
-		delete(image2AsyncJobs.byIdempotency, key)
-	}
-	if len(image2AsyncJobs.byID) >= image2AsyncJobMaxCount {
-		image2AsyncJobs.Unlock()
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": map[string]any{
-			"message": "Image2 asynchronous delivery queue is full; try again later",
-			"type":    "server_error",
-			"code":    "image2_async_queue_full",
-		}})
+		writeImage2AsyncStoreUnavailable(c)
 		return
 	}
-	job := &image2AsyncJob{
-		id:             uuid.NewString(),
-		idempotencyKey: key,
-		userID:         userID,
-		operation:      operation,
-		requestID:      requestID,
-		createdAt:      time.Now().UTC(),
-		status:         "processing",
-	}
-	image2AsyncJobs.byID[job.id] = job
-	image2AsyncJobs.byIdempotency[key] = job.id
-	acceptedSnapshot := snapshotImage2AsyncJob(job)
-	image2AsyncJobs.Unlock()
 
 	// Copy only immutable request metadata and body bytes before the original
 	// request's BodyStorageCleanup middleware closes its storage.
@@ -151,31 +157,46 @@ func SubmitImage2Job(c *gin.Context) {
 	}
 	headers := c.Request.Header.Clone()
 	remoteAddr := c.Request.RemoteAddr
-	go executeImage2AsyncJob(job, keys, headers, remoteAddr, bodyCopy)
-
-	writeImage2AsyncJobAccepted(c, acceptedSnapshot)
-}
-
-// GetImage2Job returns a user-scoped snapshot. It never retries or touches an
-// upstream channel; a completed response is replayed from the single job
-// result kept in memory until the bounded TTL expires.
-func GetImage2Job(c *gin.Context) {
-	id := strings.TrimSpace(c.Param("id"))
-	image2AsyncJobs.Lock()
-	pruneImage2AsyncJobsLocked(time.Now())
-	job := image2AsyncJobs.byID[id]
-	if job == nil || job.userID != c.GetInt("id") {
-		image2AsyncJobs.Unlock()
-		c.JSON(http.StatusNotFound, gin.H{"error": map[string]any{
-			"message": "Image2 asynchronous job not found",
-			"type":    "invalid_request_error",
-			"code":    "image2_async_job_not_found",
-		}})
+	leaseUntil := createdAt.Add(image2AsyncJobMaxRuntime + image2AsyncJobLeaseGrace)
+	claimed, err := model.ClaimImage2AsyncJob(job.ID, image2AsyncLeaseOwner, time.Now().UTC(), leaseUntil)
+	if err != nil {
+		// The metadata row is retained for idempotency and will be safely
+		// reconciled by stale recovery; do not risk an unguarded upstream call.
+		writeImage2AsyncStoreUnavailable(c)
 		return
 	}
-	snapshot := snapshotImage2AsyncJob(job)
-	image2AsyncJobs.Unlock()
+	if claimed {
+		go executeImage2AsyncJob(job.ID, job.Operation, job.RequestID, keys, headers, remoteAddr, bodyCopy)
+	}
 
+	writeImage2AsyncJobAccepted(c, snapshotImage2AsyncJob(job))
+}
+
+// GetImage2Job returns a user-scoped durable snapshot. It never retries or
+// touches an upstream channel; a completed response is replayed from the
+// database until the bounded TTL expires.
+func GetImage2Job(c *gin.Context) {
+	if err := model.CheckImage2AsyncJobSchema(); err != nil {
+		writeImage2AsyncStoreUnavailable(c)
+		return
+	}
+	_ = recoverAndPruneImage2AsyncJobs()
+	id := strings.TrimSpace(c.Param("id"))
+	job, err := model.GetImage2AsyncJob(id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		writeImage2AsyncJobNotFound(c)
+		return
+	}
+	if err != nil {
+		writeImage2AsyncStoreUnavailable(c)
+		return
+	}
+	if job.UserID != c.GetInt("id") {
+		writeImage2AsyncJobNotFound(c)
+		return
+	}
+
+	snapshot := snapshotImage2AsyncJob(job)
 	payload := gin.H{
 		"id":          snapshot.ID,
 		"object":      "image2.job",
@@ -217,7 +238,23 @@ func writeImage2AsyncJobAccepted(c *gin.Context, snapshot image2AsyncJobSnapshot
 	})
 }
 
-func executeImage2AsyncJob(job *image2AsyncJob, keys map[string]any, headers http.Header, remoteAddr string, body []byte) {
+func writeImage2AsyncJobNotFound(c *gin.Context) {
+	c.JSON(http.StatusNotFound, gin.H{"error": map[string]any{
+		"message": "Image2 asynchronous job not found",
+		"type":    "invalid_request_error",
+		"code":    "image2_async_job_not_found",
+	}})
+}
+
+func writeImage2AsyncStoreUnavailable(c *gin.Context) {
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error": map[string]any{
+		"message": "Image2 asynchronous delivery is temporarily unavailable",
+		"type":    "server_error",
+		"code":    "image2_async_store_unavailable",
+	}})
+}
+
+func executeImage2AsyncJob(jobID, operation, requestID string, keys map[string]any, headers http.Header, remoteAddr string, body []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), image2AsyncJobMaxRuntime)
 	defer cancel()
 	recorder := httptest.NewRecorder()
@@ -225,9 +262,9 @@ func executeImage2AsyncJob(job *image2AsyncJob, keys map[string]any, headers htt
 	for key, value := range keys {
 		clone.Set(key, value)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "/pg/images/"+job.operation, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "/pg/images/"+operation, bytes.NewReader(body))
 	if err != nil {
-		finishImage2AsyncJob(job, http.StatusInternalServerError, []byte(`{"error":{"message":"failed to create asynchronous request"}}`), nil)
+		finishImage2AsyncJob(jobID, http.StatusInternalServerError, []byte(`{"error":{"message":"failed to create asynchronous request"}}`))
 		return
 	}
 	request.Header = headers.Clone()
@@ -235,10 +272,10 @@ func executeImage2AsyncJob(job *image2AsyncJob, keys map[string]any, headers htt
 	request.RemoteAddr = remoteAddr
 	request.ContentLength = int64(len(body))
 	clone.Request = request
-	clone.Set(common.RequestIdKey, job.requestID)
+	clone.Set(common.RequestIdKey, requestID)
 	storage, storageErr := common.CreateBodyStorage(body)
 	if storageErr != nil {
-		finishImage2AsyncJob(job, http.StatusInternalServerError, []byte(`{"error":{"message":"failed to stage asynchronous request body"}}`), nil)
+		finishImage2AsyncJob(jobID, http.StatusInternalServerError, []byte(`{"error":{"message":"failed to stage asynchronous request body"}}`))
 		return
 	}
 	clone.Set(common.KeyBodyStorage, storage)
@@ -246,7 +283,7 @@ func executeImage2AsyncJob(job *image2AsyncJob, keys map[string]any, headers htt
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			finishImage2AsyncJob(job, http.StatusInternalServerError, []byte(`{"error":{"message":"Image2 asynchronous delivery failed"}}`), nil)
+			finishImage2AsyncJob(jobID, http.StatusInternalServerError, []byte(`{"error":{"message":"Image2 asynchronous delivery failed"}}`))
 		}
 	}()
 	Playground(clone)
@@ -254,49 +291,62 @@ func executeImage2AsyncJob(job *image2AsyncJob, keys map[string]any, headers htt
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}
-	finishImage2AsyncJob(job, status, append([]byte(nil), recorder.Body.Bytes()...), recorder.Header().Clone())
+	finishImage2AsyncJob(jobID, status, append([]byte(nil), recorder.Body.Bytes()...))
 }
 
-func finishImage2AsyncJob(job *image2AsyncJob, status int, body []byte, headers http.Header) {
-	image2AsyncJobs.Lock()
-	defer image2AsyncJobs.Unlock()
-	current := image2AsyncJobs.byID[job.id]
-	if current == nil {
-		return
+func finishImage2AsyncJob(jobID string, status int, body []byte) {
+	errorCode := ""
+	errorMessage := ""
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		errorCode = "image2_async_upstream_failure"
+		errorMessage = "Image2 asynchronous delivery failed"
 	}
-	current.httpStatus = status
-	current.responseBody = append([]byte(nil), body...)
-	current.responseHeader = headers.Clone()
-	current.finishedAt = time.Now().UTC()
-	if status >= http.StatusOK && status < http.StatusMultipleChoices {
-		current.status = "succeeded"
-	} else {
-		current.status = "failed"
-	}
+	_, _ = model.CompleteImage2AsyncJob(jobID, image2AsyncLeaseOwner, status, body, errorCode, errorMessage, time.Now().UTC())
 }
 
-func snapshotImage2AsyncJob(job *image2AsyncJob) image2AsyncJobSnapshot {
+func snapshotImage2AsyncJob(job *model.Image2AsyncJob) image2AsyncJobSnapshot {
+	if job == nil {
+		return image2AsyncJobSnapshot{}
+	}
+	status := job.Status
+	if status == model.Image2AsyncJobStatusPending || status == model.Image2AsyncJobStatusRunning {
+		status = "processing"
+	}
 	snapshot := image2AsyncJobSnapshot{
-		ID:         job.id,
-		Operation:  job.operation,
-		RequestID:  job.requestID,
-		Status:     job.status,
-		HTTPStatus: job.httpStatus,
-		CreatedAt:  job.createdAt,
-		FinishedAt: job.finishedAt,
-		Response:   append([]byte(nil), job.responseBody...),
+		ID:         job.ID,
+		Operation:  job.Operation,
+		RequestID:  job.RequestID,
+		Status:     status,
+		HTTPStatus: job.HTTPStatus,
+		CreatedAt:  job.CreatedAt,
+		Response:   append([]byte(nil), []byte(job.ResponseBody)...),
+	}
+	if job.FinishedAt != nil {
+		snapshot.FinishedAt = *job.FinishedAt
 	}
 	return snapshot
 }
 
-func pruneImage2AsyncJobsLocked(now time.Time) {
-	for id, job := range image2AsyncJobs.byID {
-		if job == nil || job.finishedAt.IsZero() || now.Sub(job.finishedAt) <= image2AsyncJobTTL {
-			continue
-		}
-		delete(image2AsyncJobs.byID, id)
-		delete(image2AsyncJobs.byIdempotency, job.idempotencyKey)
+func recoverAndPruneImage2AsyncJobs() error {
+	now := time.Now().UTC()
+	if _, err := model.RecoverImage2AsyncJobs(now, now.Add(-image2AsyncJobMaxRuntime), image2AsyncJobMaxCount); err != nil {
+		return err
 	}
+	_, err := model.PruneExpiredImage2AsyncJobs(now, image2AsyncJobMaxCount)
+	return err
+}
+
+// RecoverImage2AsyncJobsOnStartup reconciles rows left by a process restart.
+// It is safe to call before database initialization (the no-op path is used by
+// isolated router tests); request handlers repeat the bounded check lazily.
+func RecoverImage2AsyncJobsOnStartup() error {
+	if model.DB == nil {
+		return nil
+	}
+	if err := model.CheckImage2AsyncJobSchema(); err != nil {
+		return err
+	}
+	return recoverAndPruneImage2AsyncJobs()
 }
 
 func image2AsyncIdempotencyKey(userID int, operation, idempotencyKey string) string {
