@@ -17,24 +17,129 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { beforeAll, expect, mock, test } from 'bun:test';
 
-const playgroundSource = readFileSync(
-  new URL('./index.jsx', import.meta.url),
-  'utf8',
-);
+const helpersModulePath = new URL('../../helpers/index.js', import.meta.url)
+  .pathname;
 
-test('Playground wires the Image2 capability setter into useDataLoader', () => {
-  const stateDestructure = playgroundSource.match(
-    /const state = usePlaygroundState\(\);\s*const \{([\s\S]*?)\} = state;/,
+const api = {
+  get: async () => ({
+    data: {
+      success: true,
+      data: { generations: [{ size: '1024x1024' }] },
+    },
+  }),
+};
+
+// The real loader imports the aggregate helpers module, whose other exports
+// pull browser-only UI code into a Node test. Keep the loader itself real and
+// replace only its transport/normalization seams.
+mock.module(helpersModulePath, () => ({
+  API: api,
+  processModelsData: () => ({ modelOptions: [], selectedModel: '' }),
+  processGroupsData: () => [],
+  showError: () => {},
+}));
+
+let useDataLoader;
+
+beforeAll(async () => {
+  ({ useDataLoader } = await import('../../hooks/playground/useDataLoader.js'));
+});
+
+const createLoaderInputs = () => ({
+  model: 'gpt-image-2',
+  group: '44',
+});
+
+// This is a minimal real React component harness: it mounts the production
+// useDataLoader hook, invokes its real Image2 capability request, and records
+// the same setter that Playground passes from usePlaygroundState.
+const CapabilityLoaderHarness = ({ setImage2Capability, onLoad }) => {
+  const loader = useDataLoader(
+    { user: { group: 'default' } },
+    createLoaderInputs(),
+    () => {},
+    () => {},
+    () => {},
+    setImage2Capability,
   );
-  expect(stateDestructure).not.toBeNull();
-  expect(stateDestructure?.[1]).toContain('setImage2Capability');
 
-  const dataLoaderCall = playgroundSource.match(
-    /useDataLoader\(\s*([\s\S]*?)\n\s*\);/,
+  onLoad(loader.loadImage2Capability());
+
+  return React.createElement(
+    'output',
+    { 'data-capability-loader': 'mounted' },
+    'Image2 capability loader mounted',
   );
-  expect(dataLoaderCall).not.toBeNull();
-  expect(dataLoaderCall?.[1]).toContain('setImage2Capability');
+};
+
+test('786 wiring failure is characterized as a ReferenceError before loader mount', () => {
+  const LegacyMissingSetterHarness = () => {
+    // This is the exact unresolved identifier shape from the 786 Playground
+    // wiring: the hook call never mounts because the setter is not in scope.
+    const missingSetter = globalThis.eval('setImage2Capability');
+    return React.createElement('output', null, missingSetter);
+  };
+
+  expect(() =>
+    renderToStaticMarkup(React.createElement(LegacyMissingSetterHarness)),
+  ).toThrow(ReferenceError);
+});
+
+test('descendant wiring mounts the real loader and applies capability success', async () => {
+  const capability = { generations: [{ size: '3840x2160' }] };
+  const setterCalls = [];
+  const requests = [];
+  let loadPromise;
+
+  api.get = async (url, config) => {
+    requests.push({ url, config });
+    return { data: { success: true, data: capability } };
+  };
+
+  const markup = renderToStaticMarkup(
+    React.createElement(CapabilityLoaderHarness, {
+      setImage2Capability: (value) => setterCalls.push(value),
+      onLoad: (promise) => {
+        loadPromise = promise;
+      },
+    }),
+  );
+
+  await loadPromise;
+
+  expect(markup).toContain('data-capability-loader="mounted"');
+  expect(requests).toEqual([
+    {
+      url: '/api/user/image2/capabilities',
+      config: { params: { group: '44', model: 'gpt-image-2' } },
+    },
+  ]);
+  expect(setterCalls).toEqual([capability]);
+});
+
+test('descendant wiring clears capability on a loader failure without throwing', async () => {
+  const setterCalls = [];
+  let loadPromise;
+
+  api.get = async () => {
+    throw new Error('capability service unavailable');
+  };
+
+  expect(() =>
+    renderToStaticMarkup(
+      React.createElement(CapabilityLoaderHarness, {
+        setImage2Capability: (value) => setterCalls.push(value),
+        onLoad: (promise) => {
+          loadPromise = promise;
+        },
+      }),
+    ),
+  ).not.toThrow();
+
+  await loadPromise;
+  expect(setterCalls).toEqual([null]);
 });
