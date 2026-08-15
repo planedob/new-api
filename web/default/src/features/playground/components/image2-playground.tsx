@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelGroupSelector } from '@/components/model-group-selector'
-import { sendImage2Request } from '../api'
+import { getImage2ErrorDetails, sendImage2Request } from '../api'
 import {
   image2DefaultSelection,
   image2MaxN,
@@ -21,6 +21,7 @@ import {
   image2Sizes,
   isImage2SelectionSupported,
 } from '../lib/image2-capabilities'
+import { nextImage2ModeState } from '../lib/image2-mode'
 import type {
   GroupOption,
   Image2CapabilityCatalog,
@@ -94,6 +95,12 @@ export function Image2Playground(props: Image2PlaygroundProps) {
       n: count,
     })
 
+  function switchMode(nextMode: Image2Mode) {
+    const nextState = nextImage2ModeState(image, nextMode)
+    setMode(nextState.mode)
+    setImage(nextState.image)
+  }
+
   async function submit() {
     if (!canSubmit || props.disabled) return
     setIsSubmitting(true)
@@ -114,25 +121,14 @@ export function Image2Playground(props: Image2PlaygroundProps) {
         )
       )
     } catch (error: unknown) {
-      const response = error as {
-        response?: {
-          data?: { message?: string }
-          headers?: Record<string, string>
-        }
-        message?: string
-        requestId?: string
-      }
+      const details = getImage2ErrorDetails(error, t('Request error occurred'))
       setResult({
         mode,
-        requestId:
-          response.requestId ??
-          response.response?.headers?.['x-oneapi-request-id'] ??
-          null,
+        requestId: details.requestId,
         images: [],
-        error:
-          response.response?.data?.message ??
-          response.message ??
-          t('Request error occurred'),
+        error: details.message,
+        errorCode: details.code ?? null,
+        errorMetadata: details.metadata ?? null,
       })
     } finally {
       setIsSubmitting(false)
@@ -166,7 +162,7 @@ export function Image2Playground(props: Image2PlaygroundProps) {
           <div className='grid gap-2 sm:grid-cols-2'>
             <Button
               variant={isEdit ? 'outline' : 'secondary'}
-              onClick={() => setMode('generations')}
+              onClick={() => switchMode('generations')}
               disabled={
                 props.disabled ||
                 isSubmitting ||
@@ -177,7 +173,7 @@ export function Image2Playground(props: Image2PlaygroundProps) {
             </Button>
             <Button
               variant={isEdit ? 'secondary' : 'outline'}
-              onClick={() => setMode('edits')}
+              onClick={() => switchMode('edits')}
               disabled={
                 props.disabled ||
                 isSubmitting ||

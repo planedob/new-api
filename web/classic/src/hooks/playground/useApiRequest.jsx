@@ -31,6 +31,7 @@ import {
   processThinkTags,
   processIncompleteThinkTags,
 } from '../../helpers';
+import { normalizeImage2RequestPayload } from '../../helpers/image2Request';
 
 const getImageResponseContent = (data) => {
   if (!Array.isArray(data?.data)) return '';
@@ -63,6 +64,9 @@ const getDebugBody = (body) => {
 // read-only job resource. A poll timeout is surfaced with the job ID; it never
 // submits the image request again and therefore cannot duplicate billing.
 const fetchImage2Job = async (payload, operation, headers) => {
+  const normalizedPayload = normalizeImage2RequestPayload(payload, operation);
+  const isMultipart =
+    typeof FormData !== 'undefined' && normalizedPayload instanceof FormData;
   const idempotencyKey =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
@@ -70,10 +74,7 @@ const fetchImage2Job = async (payload, operation, headers) => {
   const accepted = await fetch(`/pg/images/jobs/${operation}`, {
     method: 'POST',
     headers: { ...headers, 'X-Image2-Idempotency-Key': idempotencyKey },
-    body:
-      typeof FormData !== 'undefined' && payload instanceof FormData
-        ? payload
-        : JSON.stringify(payload),
+    body: isMultipart ? normalizedPayload : JSON.stringify(normalizedPayload),
   });
   if (!accepted.ok) return accepted;
 
@@ -250,9 +251,15 @@ export const useApiRequest = (
   const handleNonStreamRequest = useCallback(
     async (payload, options = {}) => {
       const endpoint = options.endpoint || API_ENDPOINTS.CHAT_COMPLETIONS;
+      const image2Operation =
+        options.image2Operation ||
+        (endpoint === API_ENDPOINTS.IMAGE_EDITS ? 'edits' : 'generations');
+      const requestPayload = options.asyncImage2
+        ? normalizeImage2RequestPayload(payload, image2Operation)
+        : payload;
       const isMultipart =
-        typeof FormData !== 'undefined' && payload instanceof FormData;
-      const debugBody = getDebugBody(payload);
+        typeof FormData !== 'undefined' && requestPayload instanceof FormData;
+      const debugBody = getDebugBody(requestPayload);
       const debugRequest =
         endpoint === API_ENDPOINTS.CHAT_COMPLETIONS
           ? debugBody
@@ -276,18 +283,13 @@ export const useApiRequest = (
         }
 
         const response = options.asyncImage2
-          ? await fetchImage2Job(
-              payload,
-              options.image2Operation ||
-                (endpoint === API_ENDPOINTS.IMAGE_EDITS
-                  ? 'edits'
-                  : 'generations'),
-              headers,
-            )
+          ? await fetchImage2Job(requestPayload, image2Operation, headers)
           : await fetch(endpoint, {
               method: 'POST',
               headers,
-              body: isMultipart ? payload : JSON.stringify(payload),
+              body: isMultipart
+                ? requestPayload
+                : JSON.stringify(requestPayload),
             });
 
         if (!response.ok) {

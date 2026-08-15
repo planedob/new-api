@@ -12,6 +12,54 @@ import type {
   Image2CapabilityCatalog,
 } from './types'
 
+export interface Image2ErrorDetails {
+  message: string
+  requestId: string | null
+  code?: string
+  metadata?: Record<string, unknown>
+}
+
+/** Keep structured OpenAI errors visible when an async submit fails directly. */
+export function getImage2ErrorDetails(
+  error: unknown,
+  fallbackMessage = 'Image2 request failed.'
+): Image2ErrorDetails {
+  const candidate = (error ?? {}) as {
+    message?: string
+    requestId?: string
+    response?: {
+      headers?: Record<string, string>
+      data?: {
+        message?: string
+        request_id?: string
+        code?: string
+        metadata?: Record<string, unknown>
+        error?: {
+          message?: string
+          code?: string
+          metadata?: Record<string, unknown>
+        }
+      }
+    }
+  }
+  const body = candidate.response?.data
+  const nestedError = body?.error
+  return {
+    message:
+      nestedError?.message ??
+      body?.message ??
+      candidate.message ??
+      fallbackMessage,
+    requestId:
+      candidate.requestId ??
+      body?.request_id ??
+      candidate.response?.headers?.['x-oneapi-request-id'] ??
+      null,
+    code: nestedError?.code ?? body?.code,
+    metadata: nestedError?.metadata ?? body?.metadata,
+  }
+}
+
 /**
  * Send chat completion request (non-streaming)
  */
@@ -24,21 +72,32 @@ export async function sendChatCompletion(
   return res.data
 }
 
+/**
+ * Image2 generations are always JSON. The UI may still hand us a stale file
+ * when a user switches from edits to generations, so enforce the operation at
+ * the API boundary instead of relying on component state alone.
+ */
+export function buildImage2RequestPayload(
+  request: Image2Request,
+  mode: Image2Mode,
+  image?: File
+): Image2Request | FormData {
+  if (mode !== 'edits' || !image) return request
+
+  const form = new FormData()
+  Object.entries(request).forEach(([key, value]) =>
+    form.append(key, String(value))
+  )
+  form.append('image', image)
+  return form
+}
+
 export async function sendImage2Request(
   request: Image2Request,
   mode: Image2Mode,
   image?: File
 ): Promise<Image2Result> {
-  const payload = image
-    ? (() => {
-        const form = new FormData()
-        Object.entries(request).forEach(([key, value]) =>
-          form.append(key, String(value))
-        )
-        form.append('image', image)
-        return form
-      })()
-    : request
+  const payload = buildImage2RequestPayload(request, mode, image)
   const idempotencyKey =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()

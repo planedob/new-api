@@ -126,6 +126,8 @@ export interface Image2Result {
   requestId: string | null
   images: string[]
   error: string | null
+  errorCode?: string | null
+  errorMetadata?: Record<string, unknown> | null
 }
 
 // Configuration types
