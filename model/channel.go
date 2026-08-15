@@ -55,7 +55,8 @@ type Channel struct {
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
 	// cache info
-	Keys []string `json:"-" gorm:"-"`
+	Keys                []string `json:"-" gorm:"-"`
+	Image2ManagedSHA256 string   `json:"image2_managed_sha256,omitempty" gorm:"-"`
 }
 
 type ChannelInfo struct {
@@ -898,7 +899,13 @@ func (channel *Channel) ValidateSettings() error {
 	if err != nil {
 		return err
 	}
-	return channelParams.Image2Capability.Validate()
+	if err := channelParams.Image2Capability.Validate(); err != nil {
+		return err
+	}
+	if err := channelParams.Image2DeclaredCapability.Validate(); err != nil {
+		return err
+	}
+	return channelParams.Image2CapabilityVerification.Validate()
 }
 
 // ParseSetting decodes channel settings without mutating the channel or

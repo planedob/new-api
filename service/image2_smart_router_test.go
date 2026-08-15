@@ -40,6 +40,124 @@ func image2ProfileChannel(id int, name string, priority int, operations, resolut
 	return channel
 }
 
+func markImage2CapabilityVerified(channel *model.Channel, status string, verifiedAt, validUntil time.Time) {
+	setting := channel.GetSetting()
+	capabilityDigest, err := dto.Image2CapabilitySHA256(setting.Image2Capability)
+	if err != nil {
+		panic(err)
+	}
+	setting.Image2CapabilityVerification = &dto.Image2CapabilityVerification{
+		Status:           status,
+		Source:           "fixed_channel_test",
+		VerifiedAt:       verifiedAt.UTC().Format(time.RFC3339),
+		ValidUntil:       validUntil.UTC().Format(time.RFC3339),
+		CapabilitySHA256: capabilityDigest,
+		EvidenceSHA256:   []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+	}
+	channel.SetSetting(setting)
+}
+
+func TestImage2SmartRouterStrictVerificationUsesTestsNotDeclarations(t *testing.T) {
+	old := common.Image2VerifiedCapabilityRequired
+	common.Image2VerifiedCapabilityRequired = true
+	t.Cleanup(func() { common.Image2VerifiedCapabilityRequired = old })
+
+	now := time.Now().UTC()
+	declaredOnly := image2TestChannel(44, 10, []string{"generations", "edits"}, []string{"1024", "2048"}, true)
+	verified := image2TestChannel(74, 20, []string{"generations", "edits"}, []string{"1024"}, true)
+	markImage2CapabilityVerified(verified, "passed", now.Add(-time.Hour), now.Add(time.Hour))
+
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "edits", Resolution: "1024", N: 1},
+		[]*model.Channel{declaredOnly, verified},
+	)
+	selected, err := router.Next()
+	require.Nil(t, err)
+	require.Equal(t, 74, selected.Id)
+	require.Contains(t, router.DecisionSummary(), "44:image2_verification_missing")
+}
+
+func TestImage2SmartRouterRejectsFailedOrExpiredVerification(t *testing.T) {
+	old := common.Image2VerifiedCapabilityRequired
+	common.Image2VerifiedCapabilityRequired = true
+	t.Cleanup(func() { common.Image2VerifiedCapabilityRequired = old })
+
+	now := time.Now().UTC()
+	failed := image2TestChannel(44, 10, []string{"generations"}, []string{"1024"}, false)
+	markImage2CapabilityVerified(failed, "failed", now.Add(-time.Hour), now.Add(time.Hour))
+	expired := image2TestChannel(74, 20, []string{"generations"}, []string{"1024"}, false)
+	markImage2CapabilityVerified(expired, "passed", now.Add(-2*time.Hour), now.Add(-time.Hour))
+
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1},
+		[]*model.Channel{failed, expired},
+	)
+	require.Equal(t, 0, router.CandidateCount())
+	require.Contains(t, router.DecisionSummary(), "44:image2_verification_failed")
+	require.Contains(t, router.DecisionSummary(), "74:image2_verification_expired")
+}
+
+func TestImage2SmartRouterRejectsCapabilityChangedAfterVerification(t *testing.T) {
+	old := common.Image2VerifiedCapabilityRequired
+	common.Image2VerifiedCapabilityRequired = true
+	t.Cleanup(func() { common.Image2VerifiedCapabilityRequired = old })
+
+	now := time.Now().UTC()
+	channel := image2TestChannel(44, 10, []string{"generations"}, []string{"1024"}, false)
+	markImage2CapabilityVerified(channel, "passed", now.Add(-time.Hour), now.Add(time.Hour))
+	setting := channel.GetSetting()
+	setting.Image2Capability.Resolutions = append(setting.Image2Capability.Resolutions, "uhd")
+	channel.SetSetting(setting)
+
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "uhd", N: 1},
+		[]*model.Channel{channel},
+	)
+	require.Equal(t, 0, router.CandidateCount())
+	require.Contains(t, router.DecisionSummary(), "44:image2_verification_capability_mismatch")
+}
+
+func TestImage2SmartRouterProfilesDoNotInventUntestedCrossProduct(t *testing.T) {
+	channel := image2TestChannel(47, 10, []string{"generations", "edits"}, []string{"1024", "uhd"}, true)
+	setting := channel.GetSetting()
+	setting.Image2Capability.Qualities = []string{"standard", "high"}
+	setting.Image2Capability.Profiles = []dto.Image2CapabilityProfile{
+		{Operation: "generations", Resolution: "uhd", Quality: "high", MaxN: 1},
+		{Operation: "edits", Resolution: "1024", Quality: "standard", MaxN: 1},
+	}
+	channel.SetSetting(setting)
+
+	supported := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "uhd", Quality: "high", N: 1},
+		[]*model.Channel{channel},
+	)
+	selected, err := supported.Next()
+	require.Nil(t, err)
+	require.Equal(t, 47, selected.Id)
+
+	untested := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "edits", Resolution: "uhd", Quality: "high", N: 1},
+		[]*model.Channel{channel},
+	)
+	require.Equal(t, 0, untested.CandidateCount())
+	require.Contains(t, untested.DecisionSummary(), "47:capability_profile_unverified")
+}
+
+func TestImage2SmartRouterProfilesDoNotInventUntestedAspectRatio(t *testing.T) {
+	channel := image2TestChannel(44, 10, []string{"generations"}, []string{"2048"}, false)
+	setting := channel.GetSetting()
+	setting.Image2Capability.Profiles = []dto.Image2CapabilityProfile{
+		{Operation: "generations", Resolution: "2048", Size: "2048x2048", Quality: "default", MaxN: 1},
+	}
+	channel.SetSetting(setting)
+	router := newImage2SmartRouter(
+		Image2RequestCapability{Operation: "generations", Resolution: "2048", Size: "1536x1024", Quality: "auto", N: 1},
+		[]*model.Channel{channel},
+	)
+	require.Equal(t, 0, router.CandidateCount())
+	require.Contains(t, router.DecisionSummary(), "44:capability_profile_unverified")
+}
+
 func TestImage2SmartRouterDisabledKeepsLegacyPath(t *testing.T) {
 	old := common.Image2SmartRoutingEnabled
 	common.Image2SmartRoutingEnabled = false

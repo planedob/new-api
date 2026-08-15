@@ -42,6 +42,7 @@ export const channelSchema = z.object({
   other_info: z.string().default(''),
   tag: z.string().nullish(),
   setting: z.string().nullish(),
+  image2_managed_sha256: z.string().optional(),
   param_override: z.string().nullish(),
   header_override: z.string().nullish(),
   remark: z.string().default(''),
@@ -68,6 +69,37 @@ export interface ChannelSettings {
   pass_through_body_enabled?: boolean
   system_prompt?: string
   system_prompt_override?: boolean
+  image2_declared_capability?: Image2ChannelCapability
+  image2_capability?: Image2ChannelCapability
+  image2_capability_verification?: Image2CapabilityVerification
+}
+
+export interface Image2CapabilityProfile {
+  operation: 'generations' | 'edits'
+  resolution: '1024' | '2048' | 'uhd'
+  size?: string
+  quality: 'default' | 'standard' | 'high'
+  max_n: number
+}
+
+export interface Image2ChannelCapability {
+  enabled?: boolean
+  operations?: string[]
+  resolutions?: string[]
+  qualities?: string[]
+  max_n?: number
+  route_priority?: number
+  edits_accepted?: boolean
+  profiles?: Image2CapabilityProfile[]
+}
+
+export interface Image2CapabilityVerification {
+  status?: 'passed' | 'failed' | 'conflict' | 'stale'
+  source?: 'fixed_channel_test'
+  verified_at?: string
+  valid_until?: string
+  capability_sha256?: string
+  evidence_sha256?: string[]
 }
 
 export interface ChannelOtherSettings {

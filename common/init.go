@@ -116,6 +116,7 @@ func InitEnv() {
 	}
 	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
 	Image2EditsSmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_EDITS_SMART_ROUTING_ENABLED", false)
+	Image2VerifiedCapabilityRequired = GetEnvOrDefaultBool("IMAGE2_VERIFIED_CAPABILITY_REQUIRED", false)
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
 	// Initialize string variables with GetEnvOrDefaultString

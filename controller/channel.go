@@ -368,6 +368,13 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		setting := ""
+		if channel.Setting != nil {
+			setting = *channel.Setting
+		}
+		if digest, digestErr := managedImage2SettingsSHA256(setting); digestErr == nil {
+			channel.Image2ManagedSHA256 = digest
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -832,8 +839,9 @@ func DeleteChannelBatch(c *gin.Context) {
 
 type PatchChannel struct {
 	model.Channel
-	MultiKeyMode *string `json:"multi_key_mode"`
-	KeyMode      *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+	MultiKeyMode                *string `json:"multi_key_mode"`
+	KeyMode                     *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+	Image2ManagedExpectedSHA256 *string `json:"image2_managed_expected_sha256"`
 }
 
 func UpdateChannel(c *gin.Context) {
@@ -859,6 +867,46 @@ func UpdateChannel(c *gin.Context) {
 			"success": false,
 			"message": err.Error(),
 		})
+		return
+	}
+	allowManagedReplacement := false
+	if channel.Setting == nil {
+		channel.Setting = originChannel.Setting
+	} else {
+		originalSetting := ""
+		if originChannel.Setting != nil {
+			originalSetting = *originChannel.Setting
+		}
+		if channel.Image2ManagedExpectedSHA256 != nil {
+			actualDigest, digestErr := managedImage2SettingsSHA256(originalSetting)
+			if digestErr != nil {
+				c.JSON(http.StatusOK, gin.H{"success": false, "message": digestErr.Error()})
+				return
+			}
+			if !strings.EqualFold(strings.TrimSpace(*channel.Image2ManagedExpectedSHA256), actualDigest) {
+				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "Image2 capability changed; refresh before applying verified evidence"})
+				return
+			}
+			allowManagedReplacement = true
+		}
+		mergedSetting, mergeErr := mergeManagedImage2Settings(originalSetting, *channel.Setting, allowManagedReplacement)
+		if mergeErr != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": mergeErr.Error()})
+			return
+		}
+		channel.Setting = common.GetPointer(mergedSetting)
+	}
+	if !allowManagedReplacement && image2UpstreamConfigChanged(originChannel, &channel.Channel) {
+		if staleErr := markImage2VerificationStale(&channel.Channel); staleErr != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": staleErr.Error()})
+			return
+		}
+	}
+	// Validate the server-merged setting as well as the originally submitted
+	// payload. This blocks a malformed managed capability from surviving a
+	// stale-form update.
+	if err := channel.ValidateSettings(); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 

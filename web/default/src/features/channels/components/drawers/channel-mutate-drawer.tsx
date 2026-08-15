@@ -381,6 +381,20 @@ export function ChannelMutateDrawer({
     'upstream_model_update_check_enabled'
   )
   const currentSettings = form.watch('settings')
+  const currentChannelSetting = form.watch('setting')
+  const image2RoutingStatus = useMemo(() => {
+    if (!currentChannelSetting) return null
+    try {
+      const parsed = JSON.parse(currentChannelSetting)
+      const declared = parsed.image2_declared_capability
+      const capability = parsed.image2_capability
+      const verification = parsed.image2_capability_verification
+      if (!declared && !capability && !verification) return null
+      return { declared, capability, verification }
+    } catch {
+      return { invalid: true }
+    }
+  }, [currentChannelSetting])
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -3018,6 +3032,45 @@ export function ChannelMutateDrawer({
                     )}
 
                     <div className='divide-border space-y-0 divide-y border-y'>
+                      {image2RoutingStatus && (
+                        <Alert className='m-3'>
+                          <AlertDescription className='space-y-1 text-xs'>
+                            <div className='font-medium'>
+                              {t('Image2 智能路由能力（只读）')}
+                            </div>
+                            {'invalid' in image2RoutingStatus ? (
+                              <div>
+                                {t('渠道设置 JSON 无效，保存前必须修复')}
+                              </div>
+                            ) : (
+                              <>
+                                <div>
+                                  {t('实测状态')}：
+                                  {image2RoutingStatus.verification?.status ||
+                                    t('未验证，不应加入严格智能路由')}
+                                </div>
+                                <div>
+                                  {t('有效能力')}：
+                                  {image2RoutingStatus.capability?.profiles
+                                    ?.map(
+                                      (profile: {
+                                        operation: string
+                                        resolution: string
+                                        quality: string
+                                        max_n: number
+                                      }) =>
+                                        `${profile.operation}/${profile.resolution}/${profile.quality}/n≤${profile.max_n}`
+                                    )
+                                    .join('；') || t('无已验证组合')}
+                                </div>
+                                <div>
+                                  {t('供应商声明仅供对照，不直接参与路由')}
+                                </div>
+                              </>
+                            )}
+                          </AlertDescription>
+                        </Alert>
+                      )}
                       {currentType === 1 && (
                         <FormField
                           control={form.control}

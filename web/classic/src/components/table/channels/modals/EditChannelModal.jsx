@@ -221,6 +221,22 @@ const EditChannelModal = (props) => {
   const [multiKeyMode, setMultiKeyMode] = useState('random');
   const [autoBan, setAutoBan] = useState(true);
   const [inputs, setInputs] = useState(originInputs);
+  const image2RoutingStatus = useMemo(() => {
+    if (!inputs.setting) return null;
+    try {
+      const parsed = JSON.parse(inputs.setting);
+      if (!parsed.image2_declared_capability && !parsed.image2_capability && !parsed.image2_capability_verification) {
+        return null;
+      }
+      return {
+        declared: parsed.image2_declared_capability,
+        capability: parsed.image2_capability,
+        verification: parsed.image2_capability_verification,
+      };
+    } catch {
+      return { invalid: true };
+    }
+  }, [inputs.setting]);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
   const [groupOptions, setGroupOptions] = useState([]);
@@ -535,7 +551,15 @@ const EditChannelModal = (props) => {
     setInputs((prev) => ({ ...prev, [key]: value }));
 
     // 生成setting JSON并更新
-    const newSettings = { ...channelSettings, [key]: value };
+    let preservedSettings = {};
+    if (inputs.setting) {
+      try {
+        preservedSettings = JSON.parse(inputs.setting);
+      } catch (error) {
+        console.error('解析渠道设置失败:', error);
+      }
+    }
+    const newSettings = { ...preservedSettings, ...channelSettings, [key]: value };
     const settingsJson = JSON.stringify(newSettings);
     handleInputChange('setting', settingsJson);
   };
@@ -2530,6 +2554,21 @@ const EditChannelModal = (props) => {
                   <Text className='text-sm font-medium text-gray-500 mb-3 block'>
                     {t('额外设置')}
                   </Text>
+
+                  {image2RoutingStatus && (
+                    <Banner
+                      type={image2RoutingStatus.invalid ? 'danger' : 'info'}
+                      className='mb-3'
+                      description={image2RoutingStatus.invalid ? t('渠道设置 JSON 无效，保存前必须修复') : (
+                        <div>
+                          <div className='font-medium'>{t('Image2 智能路由能力（只读）')}</div>
+                          <div>{t('实测状态')}：{image2RoutingStatus.verification?.status || t('未验证，不应加入严格智能路由')}</div>
+                          <div>{t('有效能力')}：{image2RoutingStatus.capability?.profiles?.map((profile) => `${profile.operation}/${profile.resolution}/${profile.quality}/n≤${profile.max_n}`).join('；') || t('无已验证组合')}</div>
+                          <div>{t('供应商声明仅供对照，不直接参与路由')}</div>
+                        </div>
+                      )}
+                    />
+                  )}
 
                   {inputs.type === 14 && (
                     <Form.Switch field='claude_beta_query' label={t('Claude 强制 beta=true')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelOtherSettingsChange('claude_beta_query', value)} extraText={t('开启后，该渠道请求 Claude 时将强制追加 ?beta=true（无需客户端手动传参）')} />

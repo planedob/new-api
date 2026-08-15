@@ -1,8 +1,12 @@
 package dto
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ChannelSettings struct {
@@ -16,11 +20,19 @@ type ChannelSettings struct {
 	// router. It deliberately describes capabilities instead of channel IDs so
 	// operators can change upstreams without a code deployment.
 	Image2Capability *Image2ChannelCapability `json:"image2_capability,omitempty"`
+	// Image2DeclaredCapability records what the supplier or operator claims.
+	// It is intentionally never consumed by routing.  Only a capability backed
+	// by a current verification record may become authoritative in strict mode.
+	Image2DeclaredCapability *Image2ChannelCapability `json:"image2_declared_capability,omitempty"`
+	// Image2CapabilityVerification binds the effective capability above to
+	// controlled test evidence.  Keeping declaration and verification separate
+	// prevents an optimistic supplier claim from becoming routable by itself.
+	Image2CapabilityVerification *Image2CapabilityVerification `json:"image2_capability_verification,omitempty"`
 }
 
-// Image2ChannelCapability declares the Image2 request shapes an upstream can
-// safely accept. RoutePriority is only compared among compatible candidates;
-// it is not a price, channel priority, or weight.
+// Image2ChannelCapability describes the effective Image2 request shapes an
+// upstream can safely accept. In strict mode it must be bound to controlled
+// test evidence. RoutePriority is not a price, channel priority, or weight.
 type Image2ChannelCapability struct {
 	Enabled     bool     `json:"enabled,omitempty"`
 	Operations  []string `json:"operations,omitempty"`  // generations, edits
@@ -32,6 +44,124 @@ type Image2ChannelCapability struct {
 	MaxN          uint     `json:"max_n,omitempty"` // zero means no declared limit
 	RoutePriority int      `json:"route_priority,omitempty"`
 	EditsAccepted bool     `json:"edits_accepted,omitempty"`
+	// Profiles are the exact operation/resolution/quality/n combinations proven
+	// by tests. When present, routing uses these rows instead of inventing a
+	// cross-product from the summary lists above.
+	Profiles []Image2CapabilityProfile `json:"profiles,omitempty"`
+}
+
+type Image2CapabilityProfile struct {
+	Operation  string `json:"operation"`
+	Resolution string `json:"resolution"`
+	// Size is the exact tested request size. Empty is accepted only for legacy
+	// profiles created before exact-size evidence was introduced.
+	Size string `json:"size,omitempty"`
+	// Quality is "default" for omitted/auto requests, otherwise standard/high.
+	Quality string `json:"quality"`
+	MaxN    uint   `json:"max_n"`
+}
+
+// Image2CapabilityVerification is integrity metadata for a capability derived
+// from controlled fixed-channel tests. Request IDs are deliberately not stored
+// here; EvidenceSHA256 binds the non-secret evidence document without placing
+// operational logs or credentials in channel settings.
+type Image2CapabilityVerification struct {
+	Status           string   `json:"status"` // passed, failed, conflict, stale
+	Source           string   `json:"source"` // fixed_channel_test
+	VerifiedAt       string   `json:"verified_at"`
+	ValidUntil       string   `json:"valid_until"`
+	CapabilitySHA256 string   `json:"capability_sha256"`
+	EvidenceSHA256   []string `json:"evidence_sha256"`
+}
+
+func (verification *Image2CapabilityVerification) Validate() error {
+	if verification == nil {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(verification.Status))
+	switch status {
+	case "passed", "failed", "conflict", "stale":
+	default:
+		return fmt.Errorf("image2_capability_verification.status is invalid")
+	}
+	if strings.ToLower(strings.TrimSpace(verification.Source)) != "fixed_channel_test" {
+		return fmt.Errorf("image2_capability_verification.source must be fixed_channel_test")
+	}
+	verifiedAt, err := time.Parse(time.RFC3339, verification.VerifiedAt)
+	if err != nil {
+		return fmt.Errorf("image2_capability_verification.verified_at must be RFC3339")
+	}
+	validUntil, err := time.Parse(time.RFC3339, verification.ValidUntil)
+	if err != nil {
+		return fmt.Errorf("image2_capability_verification.valid_until must be RFC3339")
+	}
+	if !validUntil.After(verifiedAt) {
+		return fmt.Errorf("image2_capability_verification.valid_until must be after verified_at")
+	}
+	if len(verification.EvidenceSHA256) == 0 {
+		return fmt.Errorf("image2_capability_verification.evidence_sha256 is required")
+	}
+	if !validSHA256(verification.CapabilitySHA256) {
+		return fmt.Errorf("image2_capability_verification.capability_sha256 is invalid")
+	}
+	seen := make(map[string]struct{}, len(verification.EvidenceSHA256))
+	for _, digest := range verification.EvidenceSHA256 {
+		digest = strings.TrimSpace(digest)
+		if !validSHA256(digest) {
+			return fmt.Errorf("image2_capability_verification.evidence_sha256 contains an invalid digest")
+		}
+		if _, duplicate := seen[digest]; duplicate {
+			return fmt.Errorf("image2_capability_verification.evidence_sha256 contains a duplicate digest")
+		}
+		seen[digest] = struct{}{}
+	}
+	return nil
+}
+
+func validSHA256(digest string) bool {
+	digest = strings.TrimSpace(digest)
+	decoded, err := hex.DecodeString(digest)
+	return err == nil && len(decoded) == 32 && digest == strings.ToLower(digest)
+}
+
+func Image2CapabilitySHA256(capability *Image2ChannelCapability) (string, error) {
+	encoded, err := json.Marshal(capability)
+	if err != nil {
+		return "", err
+	}
+	var canonical any
+	if err := json.Unmarshal(encoded, &canonical); err != nil {
+		return "", err
+	}
+	encoded, err = json.Marshal(canonical)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// RoutingReason returns an empty string only for a current passed test record.
+func (verification *Image2CapabilityVerification) RoutingReason(now time.Time, capability *Image2ChannelCapability) string {
+	if verification == nil {
+		return "image2_verification_missing"
+	}
+	if err := verification.Validate(); err != nil {
+		return "image2_verification_invalid"
+	}
+	status := strings.ToLower(strings.TrimSpace(verification.Status))
+	if status != "passed" {
+		return "image2_verification_" + status
+	}
+	capabilityDigest, err := Image2CapabilitySHA256(capability)
+	if err != nil || capabilityDigest != verification.CapabilitySHA256 {
+		return "image2_verification_capability_mismatch"
+	}
+	validUntil, _ := time.Parse(time.RFC3339, verification.ValidUntil)
+	if !now.Before(validUntil) {
+		return "image2_verification_expired"
+	}
+	return ""
 }
 
 func (capability *Image2ChannelCapability) Validate() error {
@@ -67,7 +197,36 @@ func (capability *Image2ChannelCapability) Validate() error {
 			}
 		}
 	}
-	return validateImage2QualityValues(capability.Qualities)
+	if err := validateImage2QualityValues(capability.Qualities); err != nil {
+		return err
+	}
+	seenProfiles := make(map[string]struct{}, len(capability.Profiles))
+	for index, profile := range capability.Profiles {
+		operation := strings.ToLower(strings.TrimSpace(profile.Operation))
+		if operation != "generations" && operation != "edits" {
+			return fmt.Errorf("image2_capability.profiles[%d].operation is unsupported", index)
+		}
+		resolution := strings.ToLower(strings.TrimSpace(profile.Resolution))
+		if resolution != "1024" && resolution != "2048" && resolution != "uhd" {
+			return fmt.Errorf("image2_capability.profiles[%d].resolution is unsupported", index)
+		}
+		quality := strings.ToLower(strings.TrimSpace(profile.Quality))
+		if quality != "default" && quality != "standard" && quality != "high" {
+			return fmt.Errorf("image2_capability.profiles[%d].quality is unsupported", index)
+		}
+		if profile.MaxN < 1 {
+			return fmt.Errorf("image2_capability.profiles[%d].max_n must be positive", index)
+		}
+		if strings.ContainsAny(profile.Size, "\r\n\x00") {
+			return fmt.Errorf("image2_capability.profiles[%d].size is invalid", index)
+		}
+		key := fmt.Sprintf("%s/%s/%s/%s/%d", operation, resolution, strings.ToLower(strings.TrimSpace(profile.Size)), quality, profile.MaxN)
+		if _, duplicate := seenProfiles[key]; duplicate {
+			return fmt.Errorf("image2_capability.profiles contains duplicate %s", key)
+		}
+		seenProfiles[key] = struct{}{}
+	}
+	return nil
 }
 
 func validateImage2QualityValues(values []string) error {
