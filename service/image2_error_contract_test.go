@@ -209,6 +209,27 @@ func TestImage2LegacyUHDUsesVerifiedLandscapeSizeOnly(t *testing.T) {
 	require.Equal(t, []Image2Alternative{{Operation: "generations", Size: "3840x2160", Quality: "auto", N: 1}}, explanation.Alternatives)
 }
 
+func TestImage2LegacyUHDProfileWithoutSizeUsesVerifiedLandscapeOnly(t *testing.T) {
+	channel := image2ExactProfilesChannel(33,
+		dto.Image2CapabilityProfile{Operation: "generations", Resolution: "uhd", Size: "", Quality: "high", MaxN: 1},
+	)
+	setting, err := channel.ParseSetting()
+	require.NoError(t, err)
+	setting.Image2Capability.Resolutions = []string{"uhd"}
+	setting.Image2Capability.Qualities = []string{"high"}
+	channel.SetSetting(setting)
+
+	landscape := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "generations", Resolution: "uhd", Size: "3840x2160", Quality: "auto", N: 1,
+	}, []*model.Channel{channel})
+	require.Equal(t, 1, landscape.CandidateCount())
+
+	square := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "generations", Resolution: "uhd", Size: "4096x4096", Quality: "auto", N: 1,
+	}, []*model.Channel{channel})
+	require.Equal(t, 0, square.CandidateCount())
+}
+
 func TestImage2TemporarilyUnavailableIs503WithoutUpstreamOrCharge(t *testing.T) {
 	channel := image2ProfileChannel(47, "disabled-provider", 10, []string{"generations"}, []string{"1024"}, []string{"high"}, 2, false)
 	channel.Status = common.ChannelStatusAutoDisabled

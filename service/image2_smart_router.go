@@ -437,6 +437,10 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 				!strings.EqualFold(strings.TrimSpace(profile.Resolution), req.Resolution) {
 				continue
 			}
+			if strings.EqualFold(strings.TrimSpace(profile.Resolution), "uhd") && strings.TrimSpace(profile.Size) == "" &&
+				strings.TrimSpace(req.Size) != "" && canonicalImage2Size(req.Size) != "auto" && canonicalImage2Size(req.Size) != canonicalImage2Size("uhd") {
+				continue
+			}
 			if profile.Size != "" && canonicalImage2Size(profile.Size) != canonicalImage2Size(req.Size) {
 				continue
 			}

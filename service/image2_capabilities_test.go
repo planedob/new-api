@@ -65,6 +65,21 @@ func TestBuildImage2CapabilityCatalogUsesAutoOnlyForEmptyQualityDeclaration(t *t
 	}}, catalog.Profiles)
 }
 
+func TestBuildImage2CapabilityCatalogUsesVerifiedLandscapeForLegacyUHD(t *testing.T) {
+	catalog := BuildImage2CapabilityCatalog("gpt-image-2-4k", "gpt-image-2", []*model.Channel{
+		image2CatalogTestChannel(32, &dto.Image2ChannelCapability{
+			Enabled:     true,
+			Operations:  []string{"generations"},
+			Resolutions: []string{"uhd"},
+			MaxN:        1,
+		}, false),
+	})
+
+	require.Equal(t, []Image2CapabilityOption{{
+		Operation: "generations", Size: "3840x2160", Quality: "auto", MaxN: 1,
+	}}, catalog.Profiles)
+}
+
 func TestBuildImage2CapabilityCatalogDoesNotFallbackFromMalformedDeclaration(t *testing.T) {
 	malformed := &dto.Image2ChannelCapability{
 		Enabled:     true,

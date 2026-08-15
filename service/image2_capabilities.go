@@ -185,8 +185,10 @@ func canonicalImage2CatalogSize(size string) string {
 		return "1024x1024"
 	case "2048":
 		return "2048x2048"
-	case "4096", "uhd":
+	case "4096":
 		return "4096x4096"
+	case "uhd":
+		return "3840x2160"
 	default:
 		return size
 	}
