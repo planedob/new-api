@@ -136,8 +136,12 @@ func canonicalImage2Size(size string) string {
 		return "1024x1024"
 	case "2048":
 		return "2048x2048"
-	case "4096", "uhd":
+	case "4096":
 		return "4096x4096"
+	case "uhd":
+		// The legacy capability value "uhd" represents the product's verified
+		// 4K landscape contract. It must not be advertised as a made-up square.
+		return "3840x2160"
 	default:
 		return size
 	}
@@ -450,6 +454,12 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 	}
 	if !containsFold(capability.Resolutions, req.Resolution) {
 		return "resolution_unsupported"
+	}
+	if req.Resolution == "uhd" && strings.TrimSpace(req.Size) != "" && canonicalImage2Size(req.Size) != "auto" && canonicalImage2Size(req.Size) != canonicalImage2Size("uhd") {
+		// Summary-only legacy UHD declarations predate exact profiles. The only
+		// verified exact size they may promise is 3840x2160; other 4K shapes need
+		// an explicit profile instead of being inferred from the tier name.
+		return "size_unsupported"
 	}
 	// Legal quality is normalized to the provider default before this function
 	// runs. It is intentionally not a hard candidate dimension. Keep a small

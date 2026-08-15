@@ -60,9 +60,8 @@ func TestImage2UnsupportedConfigurationReportsAllMismatchedDimensions(t *testing
 	require.Equal(t, []string{"operation", "size", "n"}, metadata.UnsupportedDimensions)
 	require.False(t, metadata.UpstreamCalled)
 	require.False(t, metadata.Charged)
-	require.Len(t, metadata.Alternatives, 1)
-	require.Len(t, metadata.SafeAlternatives, 1)
-	require.Contains(t, metadata.Alternatives, Image2Alternative{Operation: "generations", Size: "1024x1024", Quality: "auto", N: 1})
+	require.Empty(t, metadata.Alternatives, "an edits request must not suggest switching to generations")
+	require.Empty(t, metadata.SafeAlternatives)
 	require.Contains(t, openAIError.Message, "operation=edits")
 	require.Contains(t, openAIError.Message, "size=4096x4096")
 	require.Contains(t, openAIError.Message, "requested_quality=high")
@@ -136,9 +135,8 @@ func TestImage2UnsupportedCombinationPrefersSameOperationAndPreservesMaxN(t *tes
 	require.Equal(t, []string{"1024x1024"}, explanation.SupportedValues["size"])
 	require.Equal(t, []string{"auto"}, explanation.SupportedValues["quality"])
 	require.Equal(t, []uint{1}, explanation.SupportedValues["n"])
-	require.Len(t, explanation.Alternatives, 2)
+	require.Len(t, explanation.Alternatives, 1)
 	require.Equal(t, Image2Alternative{Operation: "edits", Size: "1024x1024", Quality: "auto", N: 1}, explanation.Alternatives[0], "same-operation alternative must be first")
-	require.Contains(t, explanation.Alternatives, Image2Alternative{Operation: "generations", Size: "2048x2048", Quality: "auto", N: 2}, "alternative must retain the profile max_n")
 
 	err := NewImage2PreRouteError(image2ContractContext("req-image2-combination"), nil, router)
 	openAIError, metadata := decodeImage2ErrorMetadata(t, err)
@@ -174,9 +172,41 @@ func TestImage2UnsupportedCombinationTieUsesNearestSameOperationProfiles(t *test
 	require.False(t, explanation.CombinationUnsupported)
 	require.Equal(t, "edits", explanation.Alternatives[0].Operation)
 	require.EqualValues(t, 2, explanation.Alternatives[0].N)
-	require.Len(t, explanation.Alternatives, 3)
+	require.Len(t, explanation.Alternatives, 2)
 	require.Equal(t, "edits", explanation.Alternatives[1].Operation, "same-operation alternatives must precede unrelated operation profiles")
-	require.Equal(t, "generations", explanation.Alternatives[2].Operation)
+}
+
+func TestImage2AlternativesStayInOperationAndAreBounded(t *testing.T) {
+	request := Image2RequestCapability{Operation: "generations", Resolution: "2048", Size: "1536x1536", Quality: "auto", N: 1}
+	options := []image2CapabilityOption{
+		{alternative: Image2Alternative{Operation: "generations", Size: "1024x1024", Quality: "auto", N: 1}, resolution: "1024", exactSize: true, maxN: 1},
+		{alternative: Image2Alternative{Operation: "generations", Size: "2048x2048", Quality: "auto", N: 1}, resolution: "2048", exactSize: true, maxN: 1},
+		{alternative: Image2Alternative{Operation: "generations", Size: "2048x1152", Quality: "auto", N: 1}, resolution: "2048", exactSize: true, maxN: 1},
+		{alternative: Image2Alternative{Operation: "generations", Size: "1024x768", Quality: "auto", N: 1}, resolution: "1024", exactSize: true, maxN: 1},
+		{alternative: Image2Alternative{Operation: "edits", Size: "1024x1024", Quality: "auto", N: 1}, resolution: "1024", exactSize: true, maxN: 1},
+	}
+	alternatives := image2Alternatives(request, options)
+	require.Len(t, alternatives, 3)
+	for _, alternative := range alternatives {
+		require.Equal(t, "generations", alternative.Operation)
+	}
+}
+
+func TestImage2LegacyUHDUsesVerifiedLandscapeSizeOnly(t *testing.T) {
+	channel := image2ProfileChannel(32, "czeq-secret", 10, []string{"generations"}, []string{"uhd"}, nil, 1, false)
+	landscape := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "generations", Resolution: "uhd", Size: "3840x2160", Quality: "auto", N: 1,
+	}, []*model.Channel{channel})
+	require.Equal(t, 1, landscape.CandidateCount())
+
+	square := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "generations", Resolution: "uhd", Size: "4096x4096", Quality: "auto", N: 1,
+	}, []*model.Channel{channel})
+	require.Equal(t, 0, square.CandidateCount())
+	explanation := square.Explain()
+	require.Equal(t, []string{"size"}, explanation.UnsupportedDimensions)
+	require.Equal(t, []string{"3840x2160"}, explanation.SupportedValues["size"])
+	require.Equal(t, []Image2Alternative{{Operation: "generations", Size: "3840x2160", Quality: "auto", N: 1}}, explanation.Alternatives)
 }
 
 func TestImage2TemporarilyUnavailableIs503WithoutUpstreamOrCharge(t *testing.T) {

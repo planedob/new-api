@@ -71,7 +71,10 @@ type image2CapabilityOption struct {
 	maxN uint
 }
 
-const image2ExplanationValueLimit = 64
+const (
+	image2ExplanationValueLimit = 64
+	image2AlternativeLimit      = 3
+)
 
 func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 	if r == nil {
@@ -287,16 +290,16 @@ func sortedStringSet(values map[string]struct{}) []string {
 }
 
 func image2Alternatives(request Image2RequestCapability, options []image2CapabilityOption) []Image2Alternative {
-	ordered := append([]image2CapabilityOption(nil), options...)
-	// Keep the requested operation first even when a different operation has a
-	// numerically closer tuple. This prevents a safe edit fallback from being
-	// hidden behind a generation profile merely because it changes fewer fields.
-	sort.SliceStable(ordered, func(i, j int) bool {
-		leftSameOperation := strings.EqualFold(ordered[i].alternative.Operation, request.Operation)
-		rightSameOperation := strings.EqualFold(ordered[j].alternative.Operation, request.Operation)
-		if leftSameOperation != rightSameOperation {
-			return leftSameOperation
+	// An alternative is actionable only when it preserves the requested
+	// operation. Never tell an edits client to silently switch to generations,
+	// or vice versa.
+	ordered := make([]image2CapabilityOption, 0, len(options))
+	for _, option := range options {
+		if strings.EqualFold(option.alternative.Operation, request.Operation) {
+			ordered = append(ordered, option)
 		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
 		leftMismatch := len(image2OptionMismatches(request, ordered[i]))
 		rightMismatch := len(image2OptionMismatches(request, ordered[j]))
 		if leftMismatch != rightMismatch {
@@ -316,7 +319,7 @@ func image2Alternatives(request Image2RequestCapability, options []image2Capabil
 		}
 		seen[key] = struct{}{}
 		result = append(result, alternative)
-		if len(result) >= image2ExplanationValueLimit {
+		if len(result) >= image2AlternativeLimit {
 			break
 		}
 	}
@@ -351,7 +354,7 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 			options = append(options, image2CapabilityOption{
 				alternative: Image2Alternative{Operation: strings.ToLower(strings.TrimSpace(profile.Operation)), Size: size, Quality: quality, N: image2SuggestedN(profile.MaxN)},
 				resolution:  resolution,
-				exactSize:   profile.Size != "",
+				exactSize:   profile.Size != "" || resolution == "uhd",
 				maxN:        profile.MaxN,
 			})
 		}
@@ -373,6 +376,7 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 				options = append(options, image2CapabilityOption{
 					alternative: Image2Alternative{Operation: operation, Size: canonicalImage2Size(resolution), Quality: quality, N: image2SuggestedN(capability.MaxN)},
 					resolution:  resolution,
+					exactSize:   resolution == "uhd",
 					maxN:        capability.MaxN,
 				})
 			}
