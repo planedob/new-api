@@ -154,6 +154,7 @@ const Playground = () => {
     setShowSettings,
     setModels,
     setGroups,
+    setImage2Capability,
     setStatus,
     setMessage,
     setDebugData,
