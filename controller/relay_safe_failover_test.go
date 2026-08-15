@@ -143,7 +143,14 @@ func TestShouldRetryImage2RouterUsesStrictReplayAllowlist(t *testing.T) {
 		require.False(t, shouldRetry(c, info, err, 10, time.Second), "status %d must not switch Image2 channels", status)
 	}
 
-	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable} {
+	err429 := types.NewErrorWithStatusCode(
+		errors.New("upstream capacity"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusTooManyRequests,
+	)
+	require.False(t, shouldRetry(c, info, err429, 0, time.Second), "an Image2 429 must be preserved without replay")
+
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable} {
 		err := types.NewErrorWithStatusCode(
 			errors.New("replayable upstream failure"),
 			types.ErrorCodeBadResponseStatusCode,

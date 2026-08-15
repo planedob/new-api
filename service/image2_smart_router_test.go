@@ -681,7 +681,7 @@ func TestImage2SafeFailoverClassifiesReplayFailures(t *testing.T) {
 		{"403 deterministic", makeError(http.StatusForbidden, types.ErrorCodeBadResponseStatusCode, "forbidden"), image2FailureDeterministic4xx, false},
 		{"404 deterministic", makeError(http.StatusNotFound, types.ErrorCodeBadResponseStatusCode, "not found"), image2FailureDeterministic4xx, false},
 		{"408 deterministic", makeError(http.StatusRequestTimeout, types.ErrorCodeBadResponseStatusCode, "request timeout"), image2FailureDeterministic4xx, false},
-		{"429 capacity", makeError(http.StatusTooManyRequests, types.ErrorCodeBadResponseStatusCode, "capacity"), image2FailureCapacity, true},
+		{"429 capacity", makeError(http.StatusTooManyRequests, types.ErrorCodeBadResponseStatusCode, "capacity"), image2FailureCapacity, false},
 		{"503 server", makeError(http.StatusServiceUnavailable, types.ErrorCodeBadResponseStatusCode, "unavailable"), image2FailureServer5xx, true},
 		{"transport", makeError(http.StatusInternalServerError, types.ErrorCodeDoRequestFailed, "connection reset"), image2FailureTransport, true},
 		{"channel-local", makeError(http.StatusInternalServerError, types.ErrorCodeChannelNoAvailableKey, "no enabled key"), image2FailureChannelLocal, true},
@@ -769,7 +769,7 @@ func TestImage2SafeFailoverStopsDeterministicErrors(t *testing.T) {
 		err   *types.NewAPIError
 		retry bool
 	}{
-		{"429 can move to next fake upstream", types.NewOpenAIError(errors.New("capacity"), "", http.StatusTooManyRequests), true},
+		{"429 is preserved without replay", types.NewOpenAIError(errors.New("capacity"), "", http.StatusTooManyRequests), false},
 		{"503 can move to next fake upstream", types.NewOpenAIError(errors.New("unavailable"), "", http.StatusServiceUnavailable), true},
 		{"400 does not move", types.NewOpenAIError(errors.New("bad request"), "", http.StatusBadRequest), false},
 		{"401 does not move", types.NewOpenAIError(errors.New("unauthorized"), "", http.StatusUnauthorized), false},

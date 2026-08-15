@@ -34,6 +34,11 @@ type Image2RoutingExplanation struct {
 	Alternatives          []Image2Alternative
 	HasConfigured         bool
 	HasTemporary          bool
+	// CombinationUnsupported distinguishes a cross-product miss from a value
+	// that is absent everywhere. It is deliberately kept out of the client
+	// metadata: unsupported_dimensions and alternatives are the stable machine
+	// contract, while this bit only controls the human-readable message.
+	CombinationUnsupported bool
 }
 
 // Image2ErrorMetadata is the structured, customer-safe metadata attached to
@@ -90,6 +95,62 @@ func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 		}
 	}
 
+	// A profile is an exact tuple, not an independent allow-list. Prefer the
+	// requested operation before comparing dimensions so a globally supported
+	// operation is never reported as unsupported merely because another
+	// operation has a closer tuple. This is the key distinction between a
+	// missing marginal value and an unsupported cross-product.
+	preferredOptions := image2PreferredOptions(request, options)
+	nearestOptions := image2NearestOptions(request, preferredOptions)
+	if len(nearestOptions) == 0 {
+		nearestOptions = preferredOptions
+	}
+	unsupported := make([]string, 0, 4)
+	if len(options) > 0 {
+		unsupported = image2NearestMismatchDimensions(request, preferredOptions)
+	}
+	combinationUnsupported := len(r.candidates) == 0 && !r.temporary && len(options) > 0 &&
+		image2AllDimensionsHaveSupport(request, options) && len(unsupported) > 0
+	if len(unsupported) == 0 && len(r.candidates) == 0 {
+		// A compatible option exists, but every option is currently disabled.
+		// Keep the explanation actionable without mislabeling it unsupported.
+		unsupported = []string{}
+	}
+	if len(nearestOptions) == 0 {
+		nearestOptions = options
+	}
+	if len(nearestOptions) == 0 && len(options) == 0 {
+		unsupported = []string{"operation", "size", "quality", "n"}
+	}
+
+	return Image2RoutingExplanation{
+		Request:                request,
+		UnsupportedDimensions:  unsupported,
+		SupportedValues:        image2SupportedValues(nearestOptions),
+		Alternatives:           image2Alternatives(request, options),
+		HasConfigured:          r.configured,
+		HasTemporary:           r.temporary,
+		CombinationUnsupported: combinationUnsupported,
+	}
+}
+
+func image2PreferredOptions(request Image2RequestCapability, options []image2CapabilityOption) []image2CapabilityOption {
+	if len(options) == 0 {
+		return nil
+	}
+	sameOperation := make([]image2CapabilityOption, 0, len(options))
+	for _, option := range options {
+		if strings.EqualFold(option.alternative.Operation, request.Operation) {
+			sameOperation = append(sameOperation, option)
+		}
+	}
+	if len(sameOperation) > 0 {
+		return sameOperation
+	}
+	return options
+}
+
+func image2AllDimensionsHaveSupport(request Image2RequestCapability, options []image2CapabilityOption) bool {
 	operationSupported := false
 	sizeSupported := false
 	qualitySupported := false
@@ -98,8 +159,7 @@ func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 		if strings.EqualFold(option.alternative.Operation, request.Operation) {
 			operationSupported = true
 		}
-		if option.resolution == request.Resolution &&
-			(!option.exactSize || canonicalImage2Size(option.alternative.Size) == canonicalImage2Size(request.Size)) {
+		if image2OptionMatchesSize(request, option) {
 			sizeSupported = true
 		}
 		if strings.EqualFold(option.alternative.Quality, request.Quality) {
@@ -109,73 +169,56 @@ func (r *Image2SmartRouter) Explain() Image2RoutingExplanation {
 			nSupported = true
 		}
 	}
+	return operationSupported && sizeSupported && qualitySupported && nSupported
+}
 
-	unsupported := make([]string, 0, 4)
-	if !operationSupported {
-		unsupported = append(unsupported, "operation")
+func image2OptionMismatches(request Image2RequestCapability, option image2CapabilityOption) []string {
+	mismatches := make([]string, 0, 4)
+	if !strings.EqualFold(option.alternative.Operation, request.Operation) {
+		mismatches = append(mismatches, "operation")
 	}
-	if !sizeSupported {
-		unsupported = append(unsupported, "size")
+	if !image2OptionMatchesSize(request, option) {
+		mismatches = append(mismatches, "size")
 	}
-	if !qualitySupported {
-		unsupported = append(unsupported, "quality")
+	if !strings.EqualFold(option.alternative.Quality, request.Quality) {
+		mismatches = append(mismatches, "quality")
 	}
-	if !nSupported {
-		unsupported = append(unsupported, "n")
+	if option.maxN != 0 && option.maxN < request.N {
+		mismatches = append(mismatches, "n")
 	}
-	if len(unsupported) == 0 && len(r.candidates) == 0 && !r.temporary {
-		// Each individual value appears in at least one declaration, but no
-		// declaration supports the complete tuple. Report the dimensions that
-		// differ from the nearest safe alternatives instead of returning an empty
-		// explanation. This is important for profile-based declarations where
-		// cross-products are intentionally forbidden.
-		unsupported = image2NearestMismatchDimensions(request, options)
-	}
-	if len(unsupported) == 0 && len(r.candidates) == 0 {
-		// A compatible option exists, but every option is currently disabled.
-		// Keep the explanation actionable without mislabeling it unsupported.
-		unsupported = []string{}
-	}
+	return mismatches
+}
 
-	return Image2RoutingExplanation{
-		Request:               request,
-		UnsupportedDimensions: unsupported,
-		SupportedValues:       image2SupportedValues(options),
-		Alternatives:          image2Alternatives(options),
-		HasConfigured:         r.configured,
-		HasTemporary:          r.temporary,
+func image2OptionMatchesSize(request Image2RequestCapability, option image2CapabilityOption) bool {
+	return option.resolution == request.Resolution &&
+		(!option.exactSize || canonicalImage2Size(option.alternative.Size) == canonicalImage2Size(request.Size))
+}
+
+func image2NearestOptions(request Image2RequestCapability, options []image2CapabilityOption) []image2CapabilityOption {
+	if len(options) == 0 {
+		return nil
 	}
+	best := 5
+	nearest := make([]image2CapabilityOption, 0, len(options))
+	for _, option := range options {
+		mismatchCount := len(image2OptionMismatches(request, option))
+		if mismatchCount < best {
+			best = mismatchCount
+			nearest = nearest[:0]
+		}
+		if mismatchCount == best {
+			nearest = append(nearest, option)
+		}
+	}
+	return nearest
 }
 
 func image2NearestMismatchDimensions(request Image2RequestCapability, options []image2CapabilityOption) []string {
-	if len(options) == 0 {
-		return []string{"operation", "size", "quality", "n"}
-	}
-	best := 5
-	seen := make(map[string]struct{})
-	for _, option := range options {
-		mismatches := make([]string, 0, 4)
-		if !strings.EqualFold(option.alternative.Operation, request.Operation) {
-			mismatches = append(mismatches, "operation")
-		}
-		if option.resolution != request.Resolution ||
-			(option.exactSize && canonicalImage2Size(option.alternative.Size) != canonicalImage2Size(request.Size)) {
-			mismatches = append(mismatches, "size")
-		}
-		if !strings.EqualFold(option.alternative.Quality, request.Quality) {
-			mismatches = append(mismatches, "quality")
-		}
-		if option.maxN != 0 && option.maxN < request.N {
-			mismatches = append(mismatches, "n")
-		}
-		if len(mismatches) < best {
-			best = len(mismatches)
-			seen = make(map[string]struct{}, len(mismatches))
-		}
-		if len(mismatches) == best {
-			for _, mismatch := range mismatches {
-				seen[mismatch] = struct{}{}
-			}
+	nearest := image2NearestOptions(request, options)
+	seen := make(map[string]struct{}, 4)
+	for _, option := range nearest {
+		for _, mismatch := range image2OptionMismatches(request, option) {
+			seen[mismatch] = struct{}{}
 		}
 	}
 	result := make([]string, 0, len(seen))
@@ -183,9 +226,6 @@ func image2NearestMismatchDimensions(request Image2RequestCapability, options []
 		if _, ok := seen[dimension]; ok {
 			result = append(result, dimension)
 		}
-	}
-	if len(result) == 0 {
-		return []string{"operation", "size", "quality", "n"}
 	}
 	return result
 }
@@ -254,10 +294,29 @@ func sortedStringSet(values map[string]struct{}) []string {
 	return result
 }
 
-func image2Alternatives(options []image2CapabilityOption) []Image2Alternative {
-	seen := make(map[string]struct{}, len(options))
-	result := make([]Image2Alternative, 0, len(options))
-	for _, option := range options {
+func image2Alternatives(request Image2RequestCapability, options []image2CapabilityOption) []Image2Alternative {
+	ordered := append([]image2CapabilityOption(nil), options...)
+	// Keep the requested operation first even when a different operation has a
+	// numerically closer tuple. This prevents a safe edit fallback from being
+	// hidden behind a generation profile merely because it changes fewer fields.
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftSameOperation := strings.EqualFold(ordered[i].alternative.Operation, request.Operation)
+		rightSameOperation := strings.EqualFold(ordered[j].alternative.Operation, request.Operation)
+		if leftSameOperation != rightSameOperation {
+			return leftSameOperation
+		}
+		leftMismatch := len(image2OptionMismatches(request, ordered[i]))
+		rightMismatch := len(image2OptionMismatches(request, ordered[j]))
+		if leftMismatch != rightMismatch {
+			return leftMismatch < rightMismatch
+		}
+		left := fmt.Sprintf("%s/%s/%s/%d", ordered[i].alternative.Operation, ordered[i].alternative.Size, ordered[i].alternative.Quality, ordered[i].alternative.N)
+		right := fmt.Sprintf("%s/%s/%s/%d", ordered[j].alternative.Operation, ordered[j].alternative.Size, ordered[j].alternative.Quality, ordered[j].alternative.N)
+		return left < right
+	})
+	seen := make(map[string]struct{}, len(ordered))
+	result := make([]Image2Alternative, 0, len(ordered))
+	for _, option := range ordered {
 		alternative := option.alternative
 		key := fmt.Sprintf("%s\x00%s\x00%s\x00%d", alternative.Operation, alternative.Size, alternative.Quality, alternative.N)
 		if _, exists := seen[key]; exists {
@@ -269,12 +328,17 @@ func image2Alternatives(options []image2CapabilityOption) []Image2Alternative {
 			break
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		left := fmt.Sprintf("%s/%s/%s/%d", result[i].Operation, result[i].Size, result[i].Quality, result[i].N)
-		right := fmt.Sprintf("%s/%s/%s/%d", result[j].Operation, result[j].Size, result[j].Quality, result[j].N)
-		return left < right
-	})
 	return result
+}
+
+func image2SuggestedN(maxN uint) uint {
+	if maxN == 0 {
+		// Unlimited declarations are intentionally represented by a conservative
+		// one-image suggestion. The n field remains a safe alternative, not a
+		// promise to fan out to the declared ceiling.
+		return 1
+	}
+	return maxN
 }
 
 func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image2CapabilityOption {
@@ -294,7 +358,7 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 				size = canonicalImage2Size(resolution)
 			}
 			options = append(options, image2CapabilityOption{
-				alternative: Image2Alternative{Operation: strings.ToLower(strings.TrimSpace(profile.Operation)), Size: size, Quality: quality, N: 1},
+				alternative: Image2Alternative{Operation: strings.ToLower(strings.TrimSpace(profile.Operation)), Size: size, Quality: quality, N: image2SuggestedN(profile.MaxN)},
 				resolution:  resolution,
 				exactSize:   profile.Size != "",
 				maxN:        profile.MaxN,
@@ -316,7 +380,6 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 	// Alternatives are suggestions, not an exhaustive n contract. Keep them
 	// bounded and conservative so an unbounded declaration never suggests a
 	// potentially expensive fan-out.
-	n := uint(1)
 	for _, operation := range capability.Operations {
 		operation = strings.ToLower(strings.TrimSpace(operation))
 		if operation == "edits" && !capability.EditsAccepted {
@@ -326,7 +389,7 @@ func image2OptionsForCapability(capability *dto.Image2ChannelCapability) []image
 			resolution = strings.ToLower(strings.TrimSpace(resolution))
 			for _, quality := range qualities {
 				options = append(options, image2CapabilityOption{
-					alternative: Image2Alternative{Operation: operation, Size: canonicalImage2Size(resolution), Quality: quality, N: n},
+					alternative: Image2Alternative{Operation: operation, Size: canonicalImage2Size(resolution), Quality: quality, N: image2SuggestedN(capability.MaxN)},
 					resolution:  resolution,
 					maxN:        capability.MaxN,
 				})
@@ -353,8 +416,13 @@ func image2ErrorMessage(explanation Image2RoutingExplanation, temporarilyUnavail
 	if len(dimensions) == 0 {
 		dimensions = append(dimensions, "the complete operation/size/quality/n combination")
 	}
+	prefix := "unsupported Image2 configuration"
+	if explanation.CombinationUnsupported {
+		prefix += ": complete combination unsupported"
+	}
 	return fmt.Sprintf(
-		"unsupported Image2 configuration: %s; safe alternatives: %s; operation=%s, resolution=%s, size=%s, quality=%s, n=%d; upstream_called=false; charged=false",
+		"%s: %s; safe alternatives: %s; operation=%s, resolution=%s, size=%s, quality=%s, n=%d; upstream_called=false; charged=false",
+		prefix,
 		strings.Join(dimensions, "; "), formatImage2Alternatives(explanation.Alternatives), request.Operation, request.Resolution, request.Size, request.Quality, request.N,
 	)
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -102,6 +103,79 @@ func TestImage2UnsupportedConfigurationReportsSingleDimensionAndNoAlternative(t 
 	require.NotContains(t, noAlternativeOpenAI.Message, "hidden-provider")
 }
 
+func image2ExactProfilesChannel(id int, profiles ...dto.Image2CapabilityProfile) *model.Channel {
+	channel := &model.Channel{Id: id, Name: fmt.Sprintf("profile-channel-%d", id)}
+	channel.SetSetting(dto.ChannelSettings{Image2Capability: &dto.Image2ChannelCapability{
+		Enabled:       true,
+		Operations:    []string{"generations", "edits"},
+		Resolutions:   []string{"1024", "2048"},
+		EditsAccepted: true,
+		Profiles:      profiles,
+	}})
+	return channel
+}
+
+func TestImage2UnsupportedCombinationPrefersSameOperationAndPreservesMaxN(t *testing.T) {
+	channel := image2ExactProfilesChannel(48,
+		dto.Image2CapabilityProfile{Operation: "generations", Resolution: "2048", Size: "2048x2048", Quality: "high", MaxN: 2},
+		dto.Image2CapabilityProfile{Operation: "edits", Resolution: "1024", Size: "1024x1024", Quality: "standard", MaxN: 1},
+	)
+	router := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "edits", Resolution: "2048", Size: "2048x2048", Quality: "high", N: 2,
+	}, []*model.Channel{channel})
+	require.Equal(t, 0, router.CandidateCount())
+	explanation := router.Explain()
+	require.Equal(t, []string{"size", "quality", "n"}, explanation.UnsupportedDimensions)
+	require.NotContains(t, explanation.UnsupportedDimensions, "operation")
+	require.True(t, explanation.CombinationUnsupported)
+	require.Equal(t, []string{"edits"}, explanation.SupportedValues["operation"])
+	require.Equal(t, []string{"1024"}, explanation.SupportedValues["resolution"])
+	require.Equal(t, []string{"1024x1024"}, explanation.SupportedValues["size"])
+	require.Equal(t, []string{"standard"}, explanation.SupportedValues["quality"])
+	require.Equal(t, []uint{1}, explanation.SupportedValues["n"])
+	require.Len(t, explanation.Alternatives, 2)
+	require.Equal(t, Image2Alternative{Operation: "edits", Size: "1024x1024", Quality: "standard", N: 1}, explanation.Alternatives[0], "same-operation alternative must be first")
+	require.Contains(t, explanation.Alternatives, Image2Alternative{Operation: "generations", Size: "2048x2048", Quality: "high", N: 2}, "alternative must retain the profile max_n")
+
+	err := NewImage2PreRouteError(image2ContractContext("req-image2-combination"), nil, router)
+	openAIError, metadata := decodeImage2ErrorMetadata(t, err)
+	require.Equal(t, []string{"size", "quality", "n"}, metadata.UnsupportedDimensions)
+	require.Contains(t, openAIError.Message, "complete combination unsupported")
+	require.Contains(t, openAIError.Message, "size=2048x2048")
+	require.Contains(t, openAIError.Message, "quality=high")
+	require.Contains(t, openAIError.Message, "n=2")
+	require.NotContains(t, openAIError.Message, "operation=edits (requested edits; current supported values")
+	require.Equal(t, explanation.Alternatives, metadata.Alternatives)
+}
+
+func TestImage2UnsupportedCombinationTieUsesNearestSameOperationProfiles(t *testing.T) {
+	channel := image2ExactProfilesChannel(49,
+		dto.Image2CapabilityProfile{Operation: "generations", Resolution: "2048", Size: "2048x2048", Quality: "high", MaxN: 2},
+		dto.Image2CapabilityProfile{Operation: "edits", Resolution: "1024", Size: "1024x1024", Quality: "standard", MaxN: 2},
+		dto.Image2CapabilityProfile{Operation: "edits", Resolution: "2048", Size: "2048x2048", Quality: "high", MaxN: 2},
+	)
+	router := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "edits", Resolution: "2048", Size: "2048x2048", Quality: "standard", N: 1,
+	}, []*model.Channel{channel})
+	require.Equal(t, 0, router.CandidateCount())
+	explanation := router.Explain()
+	// The two edits profiles are equally close: one changes size, one changes
+	// quality. Both dimensions are reported, while the generation profile is
+	// excluded from supported_values because it is not the requested operation.
+	require.Equal(t, []string{"size", "quality"}, explanation.UnsupportedDimensions)
+	require.Equal(t, []string{"edits"}, explanation.SupportedValues["operation"])
+	require.Equal(t, []string{"1024", "2048"}, explanation.SupportedValues["resolution"])
+	require.Equal(t, []string{"1024x1024", "2048x2048"}, explanation.SupportedValues["size"])
+	require.Equal(t, []string{"high", "standard"}, explanation.SupportedValues["quality"])
+	require.Equal(t, []uint{1, 2}, explanation.SupportedValues["n"])
+	require.True(t, explanation.CombinationUnsupported)
+	require.Equal(t, "edits", explanation.Alternatives[0].Operation)
+	require.EqualValues(t, 2, explanation.Alternatives[0].N)
+	require.Len(t, explanation.Alternatives, 3)
+	require.Equal(t, "edits", explanation.Alternatives[1].Operation, "same-operation alternatives must precede unrelated operation profiles")
+	require.Equal(t, "generations", explanation.Alternatives[2].Operation)
+}
+
 func TestImage2TemporarilyUnavailableIs503WithoutUpstreamOrCharge(t *testing.T) {
 	channel := image2ProfileChannel(47, "disabled-provider", 10, []string{"generations"}, []string{"1024"}, []string{"high"}, 2, false)
 	channel.Status = common.ChannelStatusAutoDisabled
@@ -154,6 +228,59 @@ func TestNormalizeImage2UpstreamStatusRedactsSupplierDetailsFromClientError(t *t
 	require.NotContains(t, openAIError.Message, "channel-44")
 	require.NotContains(t, openAIError.Message, "supplier.example")
 	require.Contains(t, openAIError.Message, "invalid response")
+}
+
+func TestImage2Upstream429IsPreservedButNeverReplayed(t *testing.T) {
+	err := types.NewErrorWithStatusCode(errors.New("capacity"), types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
+	NormalizeImage2UpstreamStatus(err, http.StatusTooManyRequests, false)
+	require.Equal(t, http.StatusTooManyRequests, err.StatusCode)
+	decision := EvaluateImage2SafeFailover(SafeFailoverInput{
+		RelayMode: relayconstant.RelayModeImagesGenerations,
+		ModelName: "gpt-image-2",
+		Error:     err,
+	})
+	require.False(t, decision.Retry)
+	require.Equal(t, "image2_upstream_capacity_no_replay", decision.Reason)
+	require.Contains(t, err.ToOpenAIError().Message, "status 429")
+}
+
+func TestImage2FakeUpstream429StopsAttemptChainWithoutReplay(t *testing.T) {
+	serverCalls := 0
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serverCalls++
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = strings.NewReader(`{"error":{"message":"capacity"}}`).WriteTo(w)
+	}))
+	t.Cleanup(fake.Close)
+	router := newImage2SmartRouter(Image2RequestCapability{
+		Operation: "generations", Resolution: "1024", Size: "1024x1024", Quality: "standard", N: 1,
+	}, []*model.Channel{
+		image2ProfileChannel(51, "first", 10, []string{"generations"}, []string{"1024"}, []string{"standard"}, 1, false),
+		image2ProfileChannel(52, "second", 20, []string{"generations"}, []string{"1024"}, []string{"standard"}, 1, false),
+	})
+	attempts := 0
+	for {
+		_, routeErr := router.Next()
+		require.Nil(t, routeErr)
+		attempts++
+		response, requestErr := http.Get(fake.URL)
+		require.NoError(t, requestErr)
+		response.Body.Close()
+		err := types.NewErrorWithStatusCode(errors.New("capacity"), types.ErrorCodeBadResponseStatusCode, response.StatusCode)
+		NormalizeImage2UpstreamStatus(err, response.StatusCode, false)
+		decision := EvaluateImage2SafeFailover(SafeFailoverInput{
+			RelayMode: relayconstant.RelayModeImagesGenerations,
+			ModelName: "gpt-image-2",
+			Error:     err,
+		})
+		require.Equal(t, http.StatusTooManyRequests, err.StatusCode)
+		if !decision.Retry {
+			require.Equal(t, "image2_upstream_capacity_no_replay", decision.Reason)
+			break
+		}
+	}
+	require.Equal(t, 1, attempts)
+	require.Equal(t, 1, serverCalls)
 }
 
 func TestParseImage2RequestCapabilityRejectsInvalidZeroNAndQuality(t *testing.T) {

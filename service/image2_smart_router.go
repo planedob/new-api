@@ -336,13 +336,20 @@ func EvaluateImage2SafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 	switch failureClass := classifyImage2Failure(input.Error); failureClass {
 	case image2FailureDeterministic4xx:
 		return SafeFailoverDecision{Reason: "image2_deterministic_4xx"}
+	case image2FailureCapacity:
+		// Image2 429 responses are real upstream capacity decisions. Preserve
+		// the 429 for the client, but never replay the same generation/edit on a
+		// second supplier: the first supplier may have accepted or queued work
+		// despite the capacity response, and a replay could double-charge or
+		// duplicate an image task.
+		return SafeFailoverDecision{Reason: "image2_upstream_capacity_no_replay"}
 	case image2FailureServer5xx, image2FailureTransport:
 		if input.ImageGuard > 0 && input.AttemptElapsed >= input.ImageGuard &&
 			!hasNonAcceptanceEvidence(strings.ToLower(input.Error.Error())) {
 			return SafeFailoverDecision{Reason: "image2_replay_guard_elapsed"}
 		}
 		return decision
-	case image2FailureCapacity, image2FailureChannelLocal:
+	case image2FailureChannelLocal:
 		return decision
 	default:
 		return SafeFailoverDecision{Reason: "image2_replay_not_allowed_" + decision.Reason}
