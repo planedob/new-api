@@ -42,6 +42,12 @@ type Image2SmartRouter struct {
 	candidates []image2Candidate
 	next       int
 	decisions  []Image2CandidateDecision
+	// options contains customer-safe capability combinations gathered from
+	// declarations and tested fallbacks, including currently disabled channels.
+	// It never carries channel IDs or provider names.
+	options    []image2CapabilityOption
+	configured bool
+	temporary  bool
 }
 
 type image2Candidate struct {
@@ -78,8 +84,18 @@ func ParseImage2RequestCapability(info *relaycommon.RelayInfo, request *dto.Imag
 	n := uint(1)
 	if request.N != nil {
 		n = *request.N
+		if n == 0 {
+			return Image2RequestCapability{}, fmt.Errorf("invalid Image2 n %d; expected a positive integer", n)
+		}
 	}
-	return Image2RequestCapability{Operation: operation, Resolution: resolution, Size: canonicalImage2Size(request.Size), Quality: strings.ToLower(strings.TrimSpace(request.Quality)), N: n}, nil
+	quality := strings.ToLower(strings.TrimSpace(request.Quality))
+	if quality == "" {
+		quality = "auto"
+	}
+	if quality != "auto" && quality != "standard" && quality != "high" {
+		return Image2RequestCapability{}, fmt.Errorf("unsupported Image2 quality %q; expected auto, standard, or high", request.Quality)
+	}
+	return Image2RequestCapability{Operation: operation, Resolution: resolution, Size: canonicalImage2Size(request.Size), Quality: quality, N: n}, nil
 }
 
 func canonicalImage2Size(size string) string {
@@ -161,11 +177,18 @@ func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *
 		return nil, fmt.Errorf("Image2 smart routing requires a resolved channel group")
 	}
 
-	channels, err := model.GetSatisfiedChannels(group, info.OriginModelName)
+	channels, err := model.GetImage2Channels(group, info.OriginModelName)
 	if err != nil {
 		return nil, err
 	}
 	router, configured := newImage2SmartRouterIfConfigured(req, channels)
+	if len(channels) == 0 {
+		// There is no enabled ability row to hand to the normal selector. Keep an
+		// Image2 router object so Relay can emit a deterministic 422 before price
+		// estimation/pre-consume instead of falling through to a generic 500.
+		router = newImage2SmartRouter(req, channels)
+		configured = true
+	}
 	if !configured {
 		// A switch-only rollout must not turn a missing capability migration
 		// into a complete outage. Fall back only when no channel has opted in;
@@ -194,7 +217,7 @@ func newImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel
 }
 
 func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel) (*Image2SmartRouter, bool) {
-	router := &Image2SmartRouter{request: req, decisions: make([]Image2CandidateDecision, 0, len(channels))}
+	router := &Image2SmartRouter{request: req, decisions: make([]Image2CandidateDecision, 0, len(channels)), options: make([]image2CapabilityOption, 0)}
 	configured := false
 	seenChannelIDs := make(map[int]struct{}, len(channels))
 	for _, channel := range channels {
@@ -252,6 +275,19 @@ func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Chann
 				}
 			}
 		}
+		if capability != nil && capability.Enabled {
+			// Build the explanation before compatibility filtering. This lets a
+			// 422 list current supported values while retaining a separate reason
+			// for every channel in the backend decision summary.
+			router.options = append(router.options, image2OptionsForCapability(capability)...)
+		}
+		if channel.Status != 0 && channel.Status != common.ChannelStatusEnabled {
+			if reason := image2Incompatibility(req, capability); reason == "" {
+				router.temporary = true
+				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "channel_temporarily_unavailable"})
+				continue
+			}
+		}
 		if reason := image2Incompatibility(req, capability); reason != "" {
 			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
 			continue
@@ -268,6 +304,7 @@ func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Chann
 	for _, candidate := range router.candidates {
 		router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: candidate.channel.Id, Reason: "compatible"})
 	}
+	router.configured = configured
 	return router, configured
 }
 

@@ -67,6 +67,33 @@ func TestRelayImage2OversizeRequestFailsAtRequestEntryWithoutSideEffects(t *test
 	require.False(t, routerActive, "invalid Image2 size must not activate smart routing")
 }
 
+func TestRelayImage2ExplicitZeroNIs400BeforeRouting(t *testing.T) {
+	old := common.Image2SmartRoutingEnabled
+	common.Image2SmartRoutingEnabled = true
+	t.Cleanup(func() { common.Image2SmartRoutingEnabled = old })
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/images/generations",
+		strings.NewReader(`{"model":"gpt-image-2","n":0}`),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gpt-image-2")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "default")
+	ctx.Set("use_channel", []string{})
+
+	Relay(ctx, types.RelayFormatOpenAIImage)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Empty(t, ctx.GetStringSlice("use_channel"))
+	_, routerActive := ctx.Get("image2_smart_router_active")
+	require.False(t, routerActive)
+}
+
 func TestImage2PreRouteErrorMetadataIsQueryableAndSanitized(t *testing.T) {
 	for _, requestPath := range []string{"/v1/images/edits", "/pg/images/edits"} {
 		t.Run(requestPath, func(t *testing.T) {
@@ -90,6 +117,7 @@ func TestImage2PreRouteErrorMetadataIsQueryableAndSanitized(t *testing.T) {
 			require.Equal(t, "edits", metadata["operation"])
 			require.Equal(t, 0, metadata["candidate_count"])
 			require.Equal(t, false, metadata["upstream_called"])
+			require.Equal(t, false, metadata["charged"])
 			require.Equal(t, 0, metadata["quota"])
 			require.Equal(t, requestPath, metadata["request_path"])
 			require.Equal(t, "resolved-auto-group", metadata["group"])

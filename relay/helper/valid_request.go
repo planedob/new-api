@@ -164,6 +164,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 					imageRequest.Quality = "standard"
 				}
 			}
+			if imageRequest.N != nil && *imageRequest.N == 0 && imageRequest.Model == "gpt-image-2" {
+				return nil, errors.New("n must be a positive integer for gpt-image-2")
+			}
 			if imageRequest.N == nil || *imageRequest.N == 0 {
 				imageRequest.N = common.GetPointer(uint(1))
 			}
@@ -219,6 +222,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		//	return nil, errors.New("prompt is required")
 		//}
 
+		if imageRequest.N != nil && *imageRequest.N == 0 && imageRequest.Model == "gpt-image-2" {
+			return nil, errors.New("n must be a positive integer for gpt-image-2")
+		}
 		if imageRequest.N == nil || *imageRequest.N == 0 {
 			imageRequest.N = common.GetPointer(uint(1))
 		}

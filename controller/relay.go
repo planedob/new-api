@@ -69,6 +69,9 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
+	// Image2 relay handlers set this marker only immediately before an actual
+	// upstream call. It is used solely for status/charge boundary diagnostics.
+	c.Set("image2_upstream_called", false)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
@@ -112,6 +115,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Map "request body too large" to 413 so clients can handle it correctly
 		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
 			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+		} else if relayFormat == types.RelayFormatOpenAIImage {
+			// Image request shape errors (including explicit Image2 n=0) are
+			// deterministic client failures. Keep this scoped to image routes so
+			// legacy non-image error serialization remains unchanged.
+			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		} else {
 			newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest)
 		}
@@ -143,6 +151,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		if image2Router != nil {
 			c.Set("image2_smart_router_active", true)
+			if image2Router.CandidateCount() == 0 {
+				// A valid Image2 request with no compatible/temporarily available
+				// capability is a pre-route contract error. Emit it before token
+				// estimation, pricing, or pre-consume so charged=false is true by
+				// construction rather than relying on a later refund.
+				newAPIError = service.NewImage2PreRouteError(c, relayInfo, image2Router)
+				recordImage2PreRouteError(c, relayInfo, image2Router, newAPIError)
+				return
+			}
 		}
 	}
 
@@ -323,6 +340,7 @@ func image2PreRouteErrorMetadata(c *gin.Context, info *relaycommon.RelayInfo, re
 		"candidate_count": candidateCount,
 		"filter_reasons":  filterReasons,
 		"upstream_called": false,
+		"charged":         false,
 		"quota":           0,
 		"channel_id":      0,
 		"error_code":      err.GetErrorCode(),
@@ -339,7 +357,7 @@ func image2PreRouteErrorMetadata(c *gin.Context, info *relaycommon.RelayInfo, re
 func recordImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, router *service.Image2SmartRouter, err *types.NewAPIError) {
 	if c == nil || info == nil || router == nil || err == nil ||
 		!constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) ||
-		err.GetErrorCode() != types.ErrorCodeGetChannelFailed ||
+		(!service.IsImage2PreRouteError(err) && err.GetErrorCode() != types.ErrorCodeGetChannelFailed) ||
 		router.CandidateCount() != 0 {
 		return
 	}
@@ -348,6 +366,12 @@ func recordImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, rout
 		startTime = time.Now()
 	}
 	group := image2ResolvedGroup(c, info)
+	logMetadata := image2PreRouteErrorMetadata(c, info, router.RequestCapability(), router.CandidateCount(), router.DecisionSummary(), err)
+	explanation := router.Explain()
+	logMetadata["unsupported_dimensions"] = explanation.UnsupportedDimensions
+	logMetadata["alternatives"] = explanation.Alternatives
+	logMetadata["safe_alternatives"] = explanation.Alternatives
+	logMetadata["request_id"] = c.GetString(common.RequestIdKey)
 	model.RecordErrorLog(
 		c,
 		c.GetInt("id"),
@@ -362,7 +386,7 @@ func recordImage2PreRouteError(c *gin.Context, info *relaycommon.RelayInfo, rout
 		int(time.Since(startTime).Seconds()),
 		info.IsStream,
 		group,
-		image2PreRouteErrorMetadata(c, info, router.RequestCapability(), router.CandidateCount(), router.DecisionSummary(), err),
+		logMetadata,
 	)
 }
 

@@ -50,6 +50,19 @@ const (
 	ErrorCodeDoRequestFailed    ErrorCode = "do_request_failed"
 	ErrorCodeGetChannelFailed   ErrorCode = "get_channel_failed"
 	ErrorCodeGenRelayInfoFailed ErrorCode = "gen_relay_info_failed"
+	// Image2ErrorCodeUnsupportedConfiguration is returned before an upstream
+	// request when the normalized image request is valid but no configured
+	// capability supports the complete operation/size/quality/n combination.
+	ErrorCodeUnsupportedImageConfiguration ErrorCode = "unsupported_image_configuration"
+	// Image2ErrorCodeTemporarilyUnavailable is returned before an upstream
+	// request when a configured compatible capability exists but every such
+	// channel is currently unavailable. It must not be confused with an
+	// unsupported request shape or an upstream response failure.
+	ErrorCodeImage2TemporarilyUnavailable ErrorCode = "image2_temporarily_unavailable"
+	// Backward-compatible descriptive aliases for internal Image2 call sites.
+	ErrorCodeImage2UnsupportedConfiguration = ErrorCodeUnsupportedImageConfiguration
+	Image2ErrorCodeUnsupportedConfiguration = ErrorCodeUnsupportedImageConfiguration
+	Image2ErrorCodeTemporarilyUnavailable   = ErrorCodeImage2TemporarilyUnavailable
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"
@@ -209,6 +222,13 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = common.MaskSensitiveInfo(result.Message)
+	}
+	// Metadata is deliberately kept separate from the customer-facing message.
+	// This lets structured contracts (for example Image2 capability errors)
+	// carry normalized, non-secret fields without leaking backend routing
+	// topology or appending a JSON blob to the message text.
+	if len(e.Metadata) > 0 {
+		result.Metadata = e.Metadata
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)
@@ -399,6 +419,19 @@ func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 func ErrOptionWithStatusCode(statusCode int) NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.StatusCode = statusCode
+	}
+}
+
+// ErrOptionWithMetadata serializes a structured, non-secret response payload
+// into the OpenAI error metadata field. Callers should only pass bounded,
+// customer-safe values; channel IDs, supplier names and filter diagnostics
+// belong in backend error logs instead.
+func ErrOptionWithMetadata(metadata any) NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		encoded, err := common.Marshal(metadata)
+		if err == nil {
+			e.Metadata = encoded
+		}
 	}
 }
 

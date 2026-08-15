@@ -85,9 +85,19 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
+	// Mark the boundary immediately before the actual upstream call. A
+	// pre-route or conversion failure must remain upstream_called=false and
+	// cannot be relabeled as a gateway failure.
+	if service.IsImage2SmartRoute(info) {
+		c.Set("image2_upstream_called", true)
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		newAPIError := types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+		if service.IsImage2SmartRoute(info) {
+			return service.NormalizeImage2UpstreamStatus(newAPIError, 0, service.IsImage2UpstreamTimeout(err))
+		}
+		return newAPIError
 	}
 	var httpResp *http.Response
 	if resp != nil {
@@ -100,6 +110,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			} else {
 				newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 				// reset status code 重置状态码
+				if service.IsImage2SmartRoute(info) {
+					return service.NormalizeImage2UpstreamStatus(newAPIError, httpResp.StatusCode, false)
+				}
 				service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 				return newAPIError
 			}
@@ -108,6 +121,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
 	if newAPIError != nil {
+		if service.IsImage2SmartRoute(info) {
+			statusCode := http.StatusOK
+			if httpResp != nil {
+				statusCode = httpResp.StatusCode
+			}
+			return service.NormalizeImage2UpstreamStatus(newAPIError, statusCode, false)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
