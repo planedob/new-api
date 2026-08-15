@@ -16,8 +16,13 @@ requests.
 Each migration is idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`) and creates the
 same `image2_async_jobs` metadata/result schema. It stores user/operation,
 idempotency scope, request ID, status, result/error, expiry, and the CAS lease.
-It has no prompt, multipart field, image input, channel ID, or supplier field.
+`response_body` temporarily stores only the provider-neutral output that must be
+delivered by polling (for example an image URL or a sanitized `b64_json`
+output); MySQL uses `LONGTEXT` because a base64 image can be several MiB. It
+has no prompt, multipart field, image input, channel ID, or supplier field.
 The request body is process-local only and is not recoverable after a restart.
+Results are retained for the 30-minute TTL and removed by a bounded cleanup
+pass; this is not an input/prompt store.
 
 ## Order and preflight
 

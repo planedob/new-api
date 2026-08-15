@@ -61,6 +61,9 @@ func TestImage2AsyncDialectMigrationsDeclareSameFailClosedContract(t *testing.T)
 			} {
 				require.Contains(t, strings.ToLower(schema), strings.ToLower(fragment))
 			}
+			if name == "migration_image2_async_job_mysql.sql" {
+				require.Contains(t, strings.ToLower(schema), "response_body` longtext")
+			}
 			rollback := readImage2AsyncSchemaSQL(t, strings.Replace(name, "migration_", "rollback_", 1))
 			require.Contains(t, strings.ToLower(rollback), "drop")
 		})

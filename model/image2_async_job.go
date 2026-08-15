@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 // Image2AsyncJob is the durable metadata/result record for asynchronous
@@ -13,22 +14,40 @@ import (
 // contain prompts, image bytes, and other customer data. A submit node keeps
 // an ephemeral copy only for the single execution it owns.
 type Image2AsyncJob struct {
-	ID             string     `json:"id" gorm:"primaryKey;type:varchar(64)"`
-	ScopeKey       string     `json:"-" gorm:"type:varchar(191);uniqueIndex"`
-	IdempotencyKey string     `json:"-" gorm:"type:varchar(128);index"`
-	UserID         int        `json:"user_id" gorm:"index"`
-	Operation      string     `json:"operation" gorm:"type:varchar(32);index"`
-	RequestID      string     `json:"request_id" gorm:"type:varchar(128);index"`
-	Status         string     `json:"status" gorm:"type:varchar(16);index"`
-	HTTPStatus     int        `json:"http_status"`
-	ResponseBody   string     `json:"-" gorm:"type:text"`
-	ErrorCode      string     `json:"error_code,omitempty" gorm:"type:varchar(128)"`
-	ErrorMessage   string     `json:"error_message,omitempty" gorm:"type:text"`
-	CreatedAt      time.Time  `json:"created_at" gorm:"index"`
-	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	ExpiresAt      time.Time  `json:"-" gorm:"index"`
-	LeaseOwner     string     `json:"-" gorm:"type:varchar(128);index"`
-	LeaseUntil     *time.Time `json:"-" gorm:"index"`
+	ID             string                  `json:"id" gorm:"primaryKey;type:varchar(64)"`
+	ScopeKey       string                  `json:"-" gorm:"type:varchar(191);uniqueIndex"`
+	IdempotencyKey string                  `json:"-" gorm:"type:varchar(128);index"`
+	UserID         int                     `json:"user_id" gorm:"index"`
+	Operation      string                  `json:"operation" gorm:"type:varchar(32);index"`
+	RequestID      string                  `json:"request_id" gorm:"type:varchar(128);index"`
+	Status         string                  `json:"status" gorm:"type:varchar(16);index"`
+	HTTPStatus     int                     `json:"http_status"`
+	ResponseBody   Image2AsyncResponseBody `json:"-"`
+	ErrorCode      string                  `json:"error_code,omitempty" gorm:"type:varchar(128)"`
+	ErrorMessage   string                  `json:"error_message,omitempty" gorm:"type:text"`
+	CreatedAt      time.Time               `json:"created_at" gorm:"index"`
+	FinishedAt     *time.Time              `json:"finished_at,omitempty"`
+	ExpiresAt      time.Time               `json:"-" gorm:"index"`
+	LeaseOwner     string                  `json:"-" gorm:"type:varchar(128);index"`
+	LeaseUntil     *time.Time              `json:"-" gorm:"index"`
+}
+
+// Image2AsyncResponseBody is a durable, already-sanitized API result. MySQL's
+// TEXT is capped at 64 KiB, which is too small for a normal Image2 b64_json
+// response; use LONGTEXT there while keeping TEXT on SQLite/PostgreSQL.
+type Image2AsyncResponseBody string
+
+func (Image2AsyncResponseBody) GormDataType() string {
+	return "text"
+}
+
+func (Image2AsyncResponseBody) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	switch db.Dialector.Name() {
+	case "mysql":
+		return "longtext"
+	default:
+		return "text"
+	}
 }
 
 const (
@@ -152,7 +171,7 @@ func CompleteImage2AsyncJob(id, leaseOwner string, httpStatus int, responseBody 
 		Updates(map[string]any{
 			"status":        status,
 			"http_status":   httpStatus,
-			"response_body": string(responseBody),
+			"response_body": Image2AsyncResponseBody(responseBody),
 			"error_code":    errorCode,
 			"error_message": errorMessage,
 			"finished_at":   now,

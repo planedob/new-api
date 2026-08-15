@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -99,7 +101,7 @@ func TestImage2AsyncJobCompletionIsLeaseScopedAndReadableCrossInstance(t *testin
 	readBack, err := GetImage2AsyncJob(job.ID)
 	require.NoError(t, err)
 	require.Equal(t, Image2AsyncJobStatusSucceeded, readBack.Status)
-	require.Equal(t, `{"data":[{"url":"safe"}]}`, readBack.ResponseBody)
+	require.Equal(t, `{"data":[{"url":"safe"}]}`, string(readBack.ResponseBody))
 	require.Equal(t, "", readBack.LeaseOwner)
 	require.Nil(t, readBack.LeaseUntil)
 }
@@ -163,4 +165,42 @@ func TestImage2AsyncJobPruneIsBoundedAndRetainsActiveRows(t *testing.T) {
 	var activeStored Image2AsyncJob
 	require.NoError(t, DB.First(&activeStored, "id = ?", active.ID).Error)
 	require.Equal(t, Image2AsyncJobStatusRunning, activeStored.Status)
+}
+
+func TestImage2AsyncJobLargeImageResultPersistsAcrossPollAndExpires(t *testing.T) {
+	prefix := setupImage2AsyncJobTestDB(t)
+	job := image2AsyncTestJob(prefix, "large-result")
+	now := time.Now().UTC()
+	job.ExpiresAt = now.Add(30 * time.Minute)
+	require.NoError(t, CreateImage2AsyncJob(job))
+	claimed, err := ClaimImage2AsyncJob(job.ID, "node-a", now, now.Add(time.Hour))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	// An Image2 b64_json payload commonly exceeds MySQL TEXT's 64 KiB limit.
+	// Keep this synthetic result just over 8 MiB to prove the DB round-trip is
+	// lossless without storing the request prompt or input image bytes.
+	b64 := strings.Repeat("A", 8*1024*1024)
+	response := []byte(`{"data":[{"b64_json":"` + b64 + `"}]}`)
+	require.True(t, json.Valid(response))
+	completed, err := CompleteImage2AsyncJob(job.ID, "node-a", 200, response, "", "", now.Add(time.Second))
+	require.NoError(t, err)
+	require.True(t, completed)
+
+	// Simulate a poll landing on a different load-balanced node: the result is
+	// read from the durable DB, not an in-process map.
+	readBack, err := GetImage2AsyncJob(job.ID)
+	require.NoError(t, err)
+	require.Equal(t, Image2AsyncJobStatusSucceeded, readBack.Status)
+	require.Len(t, readBack.ResponseBody, len(response))
+	require.True(t, json.Valid([]byte(readBack.ResponseBody)))
+	require.Contains(t, string(readBack.ResponseBody), `"b64_json":"`+b64[:128])
+
+	// Results are retained only for the bounded 30-minute TTL window. An
+	// expired terminal row is deleted by the bounded cleanup pass.
+	deleted, err := PruneExpiredImage2AsyncJobs(now.Add(31*time.Minute), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	_, err = GetImage2AsyncJob(job.ID)
+	require.Error(t, err)
 }

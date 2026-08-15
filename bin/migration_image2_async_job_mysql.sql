@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS `image2_async_jobs` (
   `request_id` varchar(128) NOT NULL,
   `status` varchar(16) NOT NULL,
   `http_status` int NOT NULL DEFAULT 0,
-  `response_body` text NOT NULL,
+  -- Image2 b64_json results can be several MiB; TEXT (64 KiB) would truncate
+  -- the durable poll response. Keep this in sync with Image2AsyncResponseBody's
+  -- MySQL GormDBDataType (LONGTEXT).
+  `response_body` longtext NOT NULL,
   `error_code` varchar(128) NOT NULL DEFAULT '',
   `error_message` text NOT NULL,
   `created_at` datetime(6) NOT NULL,
