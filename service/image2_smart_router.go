@@ -64,8 +64,12 @@ type image2Candidate struct {
 
 func Image2SmartRoutingEnabled() bool { return common.Image2SmartRoutingEnabled }
 
+func Image2RoutingMode() string { return common.Image2RouteMode }
+
+func Image2MinimalRoutingEnabled() bool { return Image2RoutingMode() == common.Image2RouteModeMinimal }
+
 func Image2SmartRoutingEnabledFor(info *relaycommon.RelayInfo) bool {
-	if !Image2SmartRoutingEnabled() || !IsImage2SmartRoute(info) {
+	if Image2RoutingMode() == common.Image2RouteModeLegacy || !Image2SmartRoutingEnabled() || !IsImage2SmartRoute(info) {
 		return false
 	}
 	return info.RelayMode != relayconstant.RelayModeImagesEdits || common.Image2EditsSmartRoutingEnabled
@@ -322,7 +326,7 @@ func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Chann
 				continue
 			}
 		}
-		if reason := image2Incompatibility(req, capability); reason != "" {
+		if reason := image2IncompatibilityForMode(req, capability, Image2RoutingMode()); reason != "" {
 			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
 			continue
 		}
@@ -428,10 +432,20 @@ func classifyImage2Failure(err *types.NewAPIError) image2FailureClass {
 }
 
 func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2ChannelCapability) string {
+	return image2IncompatibilityForMode(req, capability, common.Image2RouteModeAdvanced)
+}
+
+// image2IncompatibilityForMode implements the only behaviour difference
+// between the retained advanced policy and the minimal production policy.
+// Minimal mode trusts a syntactically valid supplier declaration for a size
+// tier; advanced mode additionally requires an exact test profile whenever
+// profiles exist. Both modes preserve operation, edits, tier, n and enabled
+// checks. Quality has already been normalised to provider-default auto.
+func image2IncompatibilityForMode(req Image2RequestCapability, capability *dto.Image2ChannelCapability, mode string) string {
 	if capability == nil || !capability.Enabled {
 		return "image2_capability_not_enabled"
 	}
-	if len(capability.Profiles) > 0 {
+	if mode != common.Image2RouteModeMinimal && len(capability.Profiles) > 0 {
 		for _, profile := range capability.Profiles {
 			if !strings.EqualFold(strings.TrimSpace(profile.Operation), req.Operation) ||
 				!strings.EqualFold(strings.TrimSpace(profile.Resolution), req.Resolution) {

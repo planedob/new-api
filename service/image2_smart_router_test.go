@@ -83,6 +83,40 @@ func TestImage2SmartRouterPrefersSupplierDeclarationWithoutCombinationProof(t *t
 	require.Equal(t, 44, selected.Id)
 }
 
+func TestImage2MinimalRouterUsesDeclaredTierWhenExactProfilesAreIncomplete(t *testing.T) {
+	old := common.Image2RouteMode
+	common.Image2RouteMode = common.Image2RouteModeMinimal
+	t.Cleanup(func() { common.Image2RouteMode = old })
+
+	channel := image2TestChannel(32, 10, []string{"generations", "edits"}, []string{"1024", "2048", "uhd"}, true)
+	setImage2DeclaredCapability(channel, &dto.Image2ChannelCapability{
+		Enabled: true, Operations: []string{"generations", "edits"}, Resolutions: []string{"1024", "2048", "uhd"},
+		EditsAccepted: true, MaxN: 1, RoutePriority: 10,
+		Profiles: []dto.Image2CapabilityProfile{{Operation: "generations", Resolution: "1024", Size: "1024x1024", Quality: "default", MaxN: 1}},
+	})
+
+	router := newImage2SmartRouter(Image2RequestCapability{Operation: "edits", Resolution: "uhd", Size: "3840x2160", Quality: "auto", N: 1}, []*model.Channel{channel})
+	selected, err := router.Next()
+	require.Nil(t, err)
+	require.Equal(t, 32, selected.Id)
+}
+
+func TestImage2AdvancedRouterKeepsExactProfileRequirement(t *testing.T) {
+	old := common.Image2RouteMode
+	common.Image2RouteMode = common.Image2RouteModeAdvanced
+	t.Cleanup(func() { common.Image2RouteMode = old })
+
+	channel := image2TestChannel(32, 10, []string{"generations", "edits"}, []string{"1024", "2048", "uhd"}, true)
+	setImage2DeclaredCapability(channel, &dto.Image2ChannelCapability{
+		Enabled: true, Operations: []string{"generations", "edits"}, Resolutions: []string{"1024", "2048", "uhd"},
+		EditsAccepted: true, MaxN: 1, RoutePriority: 10,
+		Profiles: []dto.Image2CapabilityProfile{{Operation: "generations", Resolution: "1024", Size: "1024x1024", Quality: "default", MaxN: 1}},
+	})
+
+	router := newImage2SmartRouter(Image2RequestCapability{Operation: "edits", Resolution: "uhd", Size: "3840x2160", Quality: "auto", N: 1}, []*model.Channel{channel})
+	require.Zero(t, router.CandidateCount())
+}
+
 func TestImage2SmartRouterFallsBackToVerifiedTestsWhenSupplierDeclarationMissing(t *testing.T) {
 	old := common.Image2VerifiedCapabilityRequired
 	common.Image2VerifiedCapabilityRequired = true

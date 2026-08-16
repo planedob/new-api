@@ -116,6 +116,7 @@ func InitEnv() {
 	}
 	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
 	Image2EditsSmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_EDITS_SMART_ROUTING_ENABLED", false)
+	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeAdvanced))
 	Image2VerifiedCapabilityRequired = GetEnvOrDefaultBool("IMAGE2_VERIFIED_CAPABILITY_REQUIRED", false)
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
@@ -140,6 +141,18 @@ func InitEnv() {
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
 	initConstantEnv()
+}
+
+func normalizeImage2RouteMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case Image2RouteModeAdvanced, Image2RouteModeMinimal, Image2RouteModeLegacy:
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		// An invalid value must not silently enable the new production policy.
+		// Keep current strict behaviour for compatibility; the deployment
+		// preflight separately rejects any non-explicit production mode.
+		return Image2RouteModeAdvanced
+	}
 }
 
 func safeFailoverMaxAttemptsFromEnv() int {

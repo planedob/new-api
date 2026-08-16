@@ -162,6 +162,25 @@ var SafeFailoverImageGuardSeconds = 60
 // It defaults off so a deployment preserves the established channel selector.
 var Image2SmartRoutingEnabled = false
 
+// Image2RouteMode selects the routing policy when Image2 smart routing is
+// enabled. The mode is deliberately separate from the boolean rollout gates:
+// operators can move between the minimal production policy and the retained
+// legacy selector without rewriting channel capability data.
+//
+// "advanced" preserves the existing evidence/profile-strict router and is the
+// backwards-compatible default for deployments that do not declare a mode.
+// "minimal" treats a valid supplier declaration as the routing contract,
+// while still enforcing operation, size tier, n, enabled status and group.
+// "legacy" bypasses the capability router entirely and keeps the established
+// priority selector as the emergency fallback.
+const (
+	Image2RouteModeAdvanced = "advanced"
+	Image2RouteModeMinimal  = "minimal"
+	Image2RouteModeLegacy   = "legacy"
+)
+
+var Image2RouteMode = Image2RouteModeAdvanced
+
 // Image2EditsSmartRoutingEnabled independently gates capability-driven
 // routing for Image2 edits. It defaults off so generation routing can be
 // enabled without diverting the established /images/edits path before edit

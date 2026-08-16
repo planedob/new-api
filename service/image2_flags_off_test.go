@@ -30,6 +30,25 @@ func image2EditsSmartRoutingFlag(t *testing.T, enabled bool) {
 	t.Cleanup(func() { common.Image2EditsSmartRoutingEnabled = old })
 }
 
+func image2RoutingMode(t *testing.T, mode string) {
+	t.Helper()
+	old := common.Image2RouteMode
+	common.Image2RouteMode = mode
+	t.Cleanup(func() { common.Image2RouteMode = old })
+}
+
+func TestImage2LegacyRouteModeBypassesCapabilityRouter(t *testing.T) {
+	image2SmartRoutingFlag(t, true)
+	image2EditsSmartRoutingFlag(t, true)
+	image2RoutingMode(t, common.Image2RouteModeLegacy)
+	info := &relaycommon.RelayInfo{OriginModelName: "gpt-image-2", RelayMode: relayconstant.RelayModeImagesGenerations}
+	require.False(t, Image2SmartRoutingEnabledFor(info))
+	c, _ := gin.CreateTestContext(nil)
+	router, err := NewImage2SmartRouter(c, info, &dto.ImageRequest{Size: "1024x1024"})
+	require.NoError(t, err)
+	require.Nil(t, router)
+}
+
 func TestImage2GenerationAndEditsHaveIndependentRoutingGates(t *testing.T) {
 	image2SmartRoutingFlag(t, true)
 	image2EditsSmartRoutingFlag(t, false)

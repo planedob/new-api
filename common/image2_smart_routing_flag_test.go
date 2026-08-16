@@ -27,6 +27,25 @@ func TestImage2VerifiedCapabilityRequirementShipsDisabled(t *testing.T) {
 	}
 }
 
+func TestImage2RouteModeDefaultsToAdvanced(t *testing.T) {
+	if Image2RouteMode != Image2RouteModeAdvanced {
+		t.Fatalf("Image2RouteMode = %q, want backward-compatible advanced", Image2RouteMode)
+	}
+}
+
+func TestNormalizeImage2RouteMode(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{"minimal", Image2RouteModeMinimal},
+		{" LEGACY ", Image2RouteModeLegacy},
+		{"advanced", Image2RouteModeAdvanced},
+		{"invalid", Image2RouteModeAdvanced},
+	} {
+		if got := normalizeImage2RouteMode(test.input); got != test.want {
+			t.Fatalf("normalizeImage2RouteMode(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
 // Second, the environment cannot enable it by accident. InitEnv resolves the
 // flag with GetEnvOrDefaultBool(..., false), and strconv.ParseBool accepts a
 // narrow vocabulary: "yes", "on" and "enabled" are not booleans, so they fall
