@@ -320,7 +320,11 @@ func buildImage2SmartRouter(req Image2RequestCapability, channels []*model.Chann
 			router.options = append(router.options, image2OptionsForCapability(capability)...)
 		}
 		if channel.Status != 0 && channel.Status != common.ChannelStatusEnabled {
-			if reason := image2Incompatibility(req, capability); reason == "" {
+			// Use the active policy here as well. A disabled channel whose
+			// declaration matches minimal mode but whose exact advanced profile is
+			// incomplete must remain temporarily unavailable, never re-enter the
+			// candidate chain.
+			if reason := image2IncompatibilityForMode(req, capability, Image2RoutingMode()); reason == "" {
 				router.temporary = true
 				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "channel_temporarily_unavailable"})
 				continue
