@@ -421,15 +421,7 @@ func buildChannelAffinityKeyHint(s string) string {
 	if s == "" {
 		return ""
 	}
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	if len(s) <= 4 {
-		return "***"
-	}
-	if len(s) <= 12 {
-		return s[:2] + "..." + s[len(s)-2:]
-	}
-	return s[:4] + "..." + s[len(s)-4:]
+	return "***"
 }
 
 func cloneStringAnyMap(src map[string]interface{}) map[string]interface{} {

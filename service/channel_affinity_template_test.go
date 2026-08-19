@@ -21,7 +21,7 @@ func buildChannelAffinityTemplateContextForTest(meta channelAffinityMeta) *gin.C
 	return ctx
 }
 
-func TestBuildChannelAffinityKeyHintNeverReturnsShortSecretVerbatim(t *testing.T) {
+func TestBuildChannelAffinityKeyHintUsesLengthIndependentMask(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -29,8 +29,9 @@ func TestBuildChannelAffinityKeyHintNeverReturnsShortSecretVerbatim(t *testing.T
 	}{
 		{name: "empty", input: "", want: ""},
 		{name: "short", input: "abcd", want: "***"},
-		{name: "medium", input: "abcdefgh", want: "ab...gh"},
-		{name: "long", input: "abcdefghijklmnop", want: "abcd...mnop"},
+		{name: "medium", input: "abcdefgh", want: "***"},
+		{name: "long", input: "abcdefghijklmnop", want: "***"},
+		{name: "line breaks", input: "ab\ncd\r", want: "***"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
