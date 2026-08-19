@@ -478,6 +478,9 @@ func uploadFileFromForm(c *gin.Context, info *relaycommon.RelayInfo, fieldCandid
 	req.Header.Set("Content-Type", formContentType)
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
 
+	// File upload is a separate upstream POST from prediction creation.
+	// Mark the boundary before Do to preserve transport-failure observability.
+	common.SetContextKey(c, constant.ContextKeyUpstreamCalled, true)
 	resp, err := service.GetHttpClient().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("replicate adaptor: upload image failed: %w", err)

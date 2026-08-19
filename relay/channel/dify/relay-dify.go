@@ -99,6 +99,9 @@ func uploadDifyFile(c *gin.Context, info *relaycommon.RelayInfo, user string, me
 
 		// Send request
 		client := service.GetHttpClient()
+		// The upload is an independent upstream boundary. Mark it immediately
+		// before Do so transport failures are not misclassified as local-only.
+		common.SetContextKey(c, constant.ContextKeyUpstreamCalled, true)
 		resp, err := client.Do(req)
 		if err != nil {
 			common.SysLog("failed to send request: " + err.Error())
