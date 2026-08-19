@@ -65,12 +65,17 @@ func GetUserGroups(c *gin.Context) {
 }
 
 func GetTokenGroupVisibilityPolicies(c *gin.Context) {
-	policies, err := model.GetTokenGroupVisibilityPolicies()
-	if err != nil {
-		common.ApiError(c, err)
-		return
+	enabled := model.TokenGroupVisibilityEnabled()
+	policies := make([]model.TokenGroupVisibilityPolicy, 0)
+	if enabled {
+		var err error
+		policies, err = model.GetTokenGroupVisibilityPolicies()
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
-	common.ApiSuccess(c, gin.H{"enabled": model.TokenGroupVisibilityEnabled(), "policies": policies})
+	common.ApiSuccess(c, gin.H{"enabled": enabled, "policies": policies})
 }
 
 func SaveTokenGroupVisibilityPolicy(c *gin.Context) {

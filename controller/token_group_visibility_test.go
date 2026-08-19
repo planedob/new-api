@@ -19,6 +19,29 @@ func setupTokenGroupVisibilityTestDB(t *testing.T) {
 	}
 }
 
+func TestGetTokenGroupVisibilityPoliciesDisabledDoesNotRequireSchema(t *testing.T) {
+	openTokenControllerTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "false")
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/group/visibility", nil, 1)
+	GetTokenGroupVisibilityPolicies(ctx)
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("visibility settings must remain readable while disabled without schema: %s", recorder.Body.String())
+	}
+}
+
+func TestGetTokenGroupVisibilityPoliciesEnabledWithoutSchemaFailsClosed(t *testing.T) {
+	openTokenControllerTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/group/visibility", nil, 1)
+	GetTokenGroupVisibilityPolicies(ctx)
+	if decodeAPIResponse(t, recorder).Success {
+		t.Fatal("visibility settings must fail closed when enabled schema is missing")
+	}
+}
+
 func createVisibilityTestUser(t *testing.T, id int, username, group string) *model.User {
 	t.Helper()
 	user := &model.User{Id: id, Username: username, Password: "password", Group: group, AffCode: username + "-aff", Status: common.UserStatusEnabled}
