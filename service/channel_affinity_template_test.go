@@ -21,6 +21,24 @@ func buildChannelAffinityTemplateContextForTest(meta channelAffinityMeta) *gin.C
 	return ctx
 }
 
+func TestBuildChannelAffinityKeyHintNeverReturnsShortSecretVerbatim(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "short", input: "abcd", want: "***"},
+		{name: "medium", input: "abcdefgh", want: "ab...gh"},
+		{name: "long", input: "abcdefghijklmnop", want: "abcd...mnop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, buildChannelAffinityKeyHint(tt.input))
+		})
+	}
+}
+
 func TestApplyChannelAffinityOverrideTemplate_NoTemplate(t *testing.T) {
 	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
 		RuleName: "rule-no-template",
