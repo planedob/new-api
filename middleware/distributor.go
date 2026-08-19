@@ -29,6 +29,7 @@ type ModelRequest struct {
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		setRelayErrorStage(c, "distribution")
 		var channel *model.Channel
 		var entitlementGrant *model.EntitlementGrant
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
@@ -36,6 +37,9 @@ func Distribute() func(c *gin.Context) {
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
+		}
+		if modelRequest.Model != "" {
+			c.Set("original_model", modelRequest.Model)
 		}
 		if modelRequest.Model != "" && c.GetInt("token_id") > 0 {
 			entitlementGrant, _, err = model.ResolveTokenEntitlement(

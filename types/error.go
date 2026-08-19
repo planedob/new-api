@@ -43,13 +43,15 @@ const (
 	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
 
 	// new api error
-	ErrorCodeCountTokenFailed   ErrorCode = "count_token_failed"
-	ErrorCodeModelPriceError    ErrorCode = "model_price_error"
-	ErrorCodeInvalidApiType     ErrorCode = "invalid_api_type"
-	ErrorCodeJsonMarshalFailed  ErrorCode = "json_marshal_failed"
-	ErrorCodeDoRequestFailed    ErrorCode = "do_request_failed"
-	ErrorCodeGetChannelFailed   ErrorCode = "get_channel_failed"
-	ErrorCodeGenRelayInfoFailed ErrorCode = "gen_relay_info_failed"
+	ErrorCodeCountTokenFailed              ErrorCode = "count_token_failed"
+	ErrorCodeModelPriceError               ErrorCode = "model_price_error"
+	ErrorCodeInvalidApiType                ErrorCode = "invalid_api_type"
+	ErrorCodeJsonMarshalFailed             ErrorCode = "json_marshal_failed"
+	ErrorCodeDoRequestFailed               ErrorCode = "do_request_failed"
+	ErrorCodeGetChannelFailed              ErrorCode = "get_channel_failed"
+	ErrorCodeUnsupportedImageConfiguration ErrorCode = "unsupported_image_configuration"
+	ErrorCodeGenRelayInfoFailed            ErrorCode = "gen_relay_info_failed"
+	ErrorCodeUnhandledRelayFailure         ErrorCode = "unhandled_relay_failure"
 
 	// channel error
 	ErrorCodeChannelNoAvailableKey        ErrorCode = "channel:no_available_key"
@@ -83,12 +85,14 @@ const (
 	ErrorCodeUpdateDataError ErrorCode = "update_data_error"
 
 	// quota error
-	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
-	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
-	ErrorCodeEntitlementRequired        ErrorCode = "entitlement_required"
-	ErrorCodeEntitlementInactive        ErrorCode = "entitlement_inactive"
-	ErrorCodeEntitlementDailyLimit      ErrorCode = "entitlement_daily_limit_exceeded"
-	ErrorCodeEntitlementTotalLimit      ErrorCode = "entitlement_total_limit_exceeded"
+	ErrorCodeInsufficientUserQuota       ErrorCode = "insufficient_user_quota"
+	ErrorCodePreConsumeTokenQuotaFailed  ErrorCode = "pre_consume_token_quota_failed"
+	ErrorCodeEntitlementRequired         ErrorCode = "entitlement_required"
+	ErrorCodeEntitlementInactive         ErrorCode = "entitlement_inactive"
+	ErrorCodeEntitlementDailyLimit       ErrorCode = "entitlement_daily_limit_exceeded"
+	ErrorCodeEntitlementTotalLimit       ErrorCode = "entitlement_total_limit_exceeded"
+	ErrorCodeTokenConcurrencyLimit       ErrorCode = "token_concurrency_limit_reached"
+	ErrorCodeTokenConcurrencyUnavailable ErrorCode = "token_concurrency_unavailable"
 )
 
 type NewAPIError struct {
