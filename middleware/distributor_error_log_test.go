@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -116,6 +117,37 @@ func TestAuthenticatedMiddlewareFailureCreatesSearchableErrorLog(t *testing.T) {
 	other := map[string]interface{}{}
 	require.NoError(t, common.UnmarshalJsonStr(rows[0].Other, &other))
 	require.Equal(t, "rate_limit", other["error_stage"])
+}
+
+func TestCustomerErrorResponseIncludesCauseCodeAndRequestID(t *testing.T) {
+	setupDistributorErrorLogTestDB(t)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	c.Set("id", 9107)
+	c.Set("username", "customer-error-user")
+	c.Set(common.RequestIdKey, "customer-error-request-id")
+
+	abortWithOpenAiMessage(
+		c,
+		http.StatusUnprocessableEntity,
+		"image size is unsupported; use 1024x1024",
+		types.ErrorCodeUnsupportedImageConfiguration,
+	)
+
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(recorder.Body).Decode(&payload))
+	require.Equal(t, http.StatusUnprocessableEntity, recorder.Code)
+	require.Equal(t, "new_api_error", payload.Error.Type)
+	require.Equal(t, string(types.ErrorCodeUnsupportedImageConfiguration), payload.Error.Code)
+	require.Contains(t, payload.Error.Message, "image size is unsupported")
+	require.Contains(t, payload.Error.Message, "customer-error-request-id")
 }
 
 func TestRelayErrorAuditCatchesDirectAuthenticatedHTTPFailure(t *testing.T) {
