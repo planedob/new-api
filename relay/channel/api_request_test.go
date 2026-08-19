@@ -3,12 +3,52 @@ package channel
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	common2 "github.com/QuantumNous/new-api/common"
+	globalconstant "github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDoRequestMarksUpstreamBoundaryBeforeClientCall(t *testing.T) {
+	service.InitHttpClient()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test"}`))
+	req, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(`{"model":"test"}`))
+	require.NoError(t, err)
+
+	resp, err := DoRequest(ctx, req, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+	require.True(t, common2.GetContextKeyBool(ctx, globalconstant.ContextKeyUpstreamCalled))
+	resp.Body.Close()
+}
+
+func TestDoRequestKeepsUpstreamBoundaryFalseBeforeClientCreation(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test"}`))
+	req, err := http.NewRequest(http.MethodPost, "http://example.com", strings.NewReader(`{"model":"test"}`))
+	require.NoError(t, err)
+
+	_, err = DoRequest(ctx, req, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{Proxy: "http://[::1"}},
+	})
+	require.Error(t, err)
+	require.False(t, common2.GetContextKeyBool(ctx, globalconstant.ContextKeyUpstreamCalled))
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()
