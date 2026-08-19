@@ -434,6 +434,14 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 		))
 		return decision.Retry
 	}
+	// Image generation/edit requests are non-idempotent once bytes have been
+	// sent upstream. Legacy channel-error retry is still allowed before the
+	// upstream boundary, but must not replay an already-submitted image POST.
+	if (info.RelayMode == relayconstant.RelayModeImagesGenerations ||
+		info.RelayMode == relayconstant.RelayModeImagesEdits) &&
+		common.GetContextKeyBool(c, constant.ContextKeyUpstreamCalled) {
+		return false
+	}
 	if types.IsChannelError(openaiErr) {
 		return true
 	}

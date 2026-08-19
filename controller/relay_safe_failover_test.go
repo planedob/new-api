@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
@@ -131,4 +132,33 @@ func TestShouldRetryLegacyModePreservesChannelErrorBehavior(t *testing.T) {
 	)
 
 	require.True(t, shouldRetry(c, info, channelErr, 0, time.Second))
+}
+
+func TestShouldRetryLegacyImageStopsAfterUpstreamCall(t *testing.T) {
+	setupSafeFailoverTest(t)
+	common.SafeFailoverV1Enabled = false
+	c := safeFailoverContext()
+	common.SetContextKey(c, constant.ContextKeyUpstreamCalled, true)
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesGenerations}
+	channelErr := types.NewErrorWithStatusCode(
+		errors.New("channel has no available key after upstream response"),
+		types.ErrorCodeChannelNoAvailableKey,
+		http.StatusBadGateway,
+	)
+
+	require.False(t, shouldRetry(c, info, channelErr, 10, time.Second))
+}
+
+func TestShouldRetryLegacyImageAllowsChannelFailoverBeforeUpstreamCall(t *testing.T) {
+	setupSafeFailoverTest(t)
+	common.SafeFailoverV1Enabled = false
+	c := safeFailoverContext()
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits}
+	channelErr := types.NewErrorWithStatusCode(
+		errors.New("channel has no available key before upstream call"),
+		types.ErrorCodeChannelNoAvailableKey,
+		http.StatusBadGateway,
+	)
+
+	require.True(t, shouldRetry(c, info, channelErr, 10, time.Second))
 }
