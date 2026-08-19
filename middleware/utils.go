@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
@@ -99,7 +100,8 @@ func RelayErrorAudit() gin.HandlerFunc {
 			types.ErrOptionWithSkipRetry(),
 		)
 		service.RecordRelayErrorLog(c, auditErr, service.RelayErrorLogOptions{
-			Stage: "response_audit",
+			Stage:          "response_audit",
+			UpstreamCalled: common.GetContextKeyBool(c, constant.ContextKeyUpstreamCalled),
 			Extra: map[string]interface{}{
 				"fallback_audit":  true,
 				"response_status": statusCode,

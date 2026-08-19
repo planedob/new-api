@@ -18,11 +18,12 @@ const relayErrorLogRecordedAnyKey = "relay_error_log_recorded_any"
 // when the request never reached an upstream; such failures are still useful
 // operational evidence and are recorded with channel_id=0.
 type RelayErrorLogOptions struct {
-	Stage     string
-	Channel   *types.ChannelError
-	ModelName string
-	Group     string
-	Extra     map[string]interface{}
+	Stage          string
+	Channel        *types.ChannelError
+	ModelName      string
+	Group          string
+	UpstreamCalled bool
+	Extra          map[string]interface{}
 }
 
 var relayErrorLogExtraAllowlist = map[string]struct{}{
@@ -88,6 +89,9 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	other["channel_id"] = channelID
 	other["channel_name"] = channelName
 	other["channel_type"] = channelType
+	// This is explicit rather than inferred from channel_id: a selected channel
+	// can still fail before its adapter sends anything upstream.
+	other["upstream_called"] = options.UpstreamCalled
 	for key, value := range safeRelayErrorLogExtra(options.Extra) {
 		other[key] = value
 	}

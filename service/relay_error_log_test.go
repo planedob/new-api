@@ -69,10 +69,34 @@ func TestRecordRelayErrorLogPersistsPreUpstreamFailure(t *testing.T) {
 	other := map[string]interface{}{}
 	require.NoError(t, common.UnmarshalJsonStr(rows[0].Other, &other))
 	require.Equal(t, "channel_selection", other["error_stage"])
+	require.Equal(t, false, other["upstream_called"])
 	require.Equal(t, string(types.ErrorCodeUnsupportedImageConfiguration), other["error_code"])
 	require.Equal(t, "44:quality_unsupported,32:resolution_unsupported", other["image2_candidate_decisions"])
 	require.NotContains(t, rows[0].Other, "token-name-from-context")
 	require.NotContains(t, rows[0].Other, "provider-secret-response")
+}
+
+func TestRecordRelayErrorLogMarksUpstreamCallExplicitly(t *testing.T) {
+	truncate(t)
+	previous := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previous })
+
+	c := relayErrorLogTestContext()
+	relayErr := types.NewErrorWithStatusCode(errors.New("upstream rejected request"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
+	recorded := RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
+		Stage:          "upstream",
+		UpstreamCalled: true,
+		Channel:        &types.ChannelError{ChannelId: 19, ChannelType: constant.ChannelTypeOpenAI, ChannelName: "test-provider"},
+	})
+	require.True(t, recorded)
+
+	var row model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
+	other := map[string]interface{}{}
+	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
+	require.Equal(t, true, other["upstream_called"])
+	require.Equal(t, float64(19), other["channel_id"])
 }
 
 func TestRecordRelayErrorLogRespectsNoRecordOption(t *testing.T) {

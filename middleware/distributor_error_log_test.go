@@ -156,6 +156,36 @@ func TestRelayErrorAuditCatchesDirectAuthenticatedHTTPFailure(t *testing.T) {
 	require.Equal(t, float64(http.StatusBadGateway), other["response_status"])
 }
 
+func TestRelayErrorAuditPreservesUpstreamBoundary(t *testing.T) {
+	db := setupDistributorErrorLogTestDB(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("id", 9106)
+		c.Set("token_id", 9206)
+		c.Set("group", "default")
+		c.Set("original_model", "audit-upstream-model")
+		c.Set(common.RequestIdKey, "audit-upstream-request-id")
+		common.SetContextKey(c, constant.ContextKeyUpstreamCalled, true)
+		c.Next()
+	})
+	router.Use(RelayErrorAudit())
+	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		c.Status(http.StatusBadGateway)
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil))
+	require.Equal(t, http.StatusBadGateway, recorder.Code)
+
+	var rows []model.Log
+	require.NoError(t, db.Where("request_id = ?", "audit-upstream-request-id").Find(&rows).Error)
+	require.Len(t, rows, 1)
+	other := map[string]interface{}{}
+	require.NoError(t, common.UnmarshalJsonStr(rows[0].Other, &other))
+	require.Equal(t, true, other["upstream_called"])
+}
+
 func TestAnonymousClientErrorDoesNotFloodCustomerErrorLog(t *testing.T) {
 	db := setupDistributorErrorLogTestDB(t)
 	recorder := httptest.NewRecorder()

@@ -211,6 +211,10 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 		req.Header.Set("mj-api-secret", auth)
 	}
 	defer cancel()
+	// The Midjourney adapter has its own HTTP path and does not use the shared
+	// relay/channel request helper. Mark the upstream boundary immediately
+	// before the non-idempotent submission request.
+	common.SetContextKey(c, constant.ContextKeyUpstreamCalled, true)
 	resp, err := GetHttpClient().Do(req)
 	if err != nil {
 		common.SysLog("do request failed: " + err.Error())
