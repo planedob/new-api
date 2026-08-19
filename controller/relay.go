@@ -228,12 +228,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayErrorExtra = nil
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
-			if retryParam.Image2Router != nil {
-				relayErrorExtra = map[string]interface{}{
-					"image2_request_capability":  retryParam.Image2Router.RequestSummary(),
-					"image2_candidate_decisions": retryParam.Image2Router.DecisionSummary(),
-				}
-			}
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
 			break
