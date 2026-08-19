@@ -42,6 +42,31 @@ func TestGetTokenGroupVisibilityPoliciesEnabledWithoutSchemaFailsClosed(t *testi
 	}
 }
 
+func TestReplaceTokenGroupVisibilityPoliciesDisabledCannotMutateExistingPolicies(t *testing.T) {
+	setupTokenGroupVisibilityTestDB(t)
+	if err := model.SaveTokenGroupVisibilityPolicy(model.TokenGroupVisibilityPolicy{
+		Group: "default", Visibility: model.TokenGroupVisibilityHidden,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "false")
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/group/token-visibility/batch", map[string]any{
+		"policies": []model.TokenGroupVisibilityPolicy{},
+	}, 1)
+	ReplaceTokenGroupVisibilityPolicies(ctx)
+	if decodeAPIResponse(t, recorder).Success {
+		t.Fatal("disabled visibility endpoint must reject mutation")
+	}
+	policies, err := model.GetTokenGroupVisibilityPolicies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policies) != 1 || policies[0].Group != "default" || policies[0].Visibility != model.TokenGroupVisibilityHidden {
+		t.Fatalf("disabled mutation changed existing policies: %#v", policies)
+	}
+}
+
 func createVisibilityTestUser(t *testing.T, id int, username, group string) *model.User {
 	t.Helper()
 	user := &model.User{Id: id, Username: username, Password: "password", Group: group, AffCode: username + "-aff", Status: common.UserStatusEnabled}

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,6 +12,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+var errTokenGroupVisibilityDisabled = errors.New("令牌分组可见性功能未启用")
+
+func requireTokenGroupVisibilityEnabled(c *gin.Context) bool {
+	if model.TokenGroupVisibilityEnabled() {
+		return true
+	}
+	common.ApiError(c, errTokenGroupVisibilityDisabled)
+	return false
+}
 
 func GetGroups(c *gin.Context) {
 	groupNames := make([]string, 0)
@@ -79,6 +90,9 @@ func GetTokenGroupVisibilityPolicies(c *gin.Context) {
 }
 
 func SaveTokenGroupVisibilityPolicy(c *gin.Context) {
+	if !requireTokenGroupVisibilityEnabled(c) {
+		return
+	}
 	var policy model.TokenGroupVisibilityPolicy
 	if err := c.ShouldBindJSON(&policy); err != nil {
 		common.ApiError(c, err)
@@ -93,6 +107,9 @@ func SaveTokenGroupVisibilityPolicy(c *gin.Context) {
 }
 
 func ReplaceTokenGroupVisibilityPolicies(c *gin.Context) {
+	if !requireTokenGroupVisibilityEnabled(c) {
+		return
+	}
 	var request struct {
 		Policies []model.TokenGroupVisibilityPolicy `json:"policies"`
 	}
@@ -109,6 +126,9 @@ func ReplaceTokenGroupVisibilityPolicies(c *gin.Context) {
 }
 
 func DeleteTokenGroupVisibilityPolicy(c *gin.Context) {
+	if !requireTokenGroupVisibilityEnabled(c) {
+		return
+	}
 	if err := model.DeleteTokenGroupVisibilityPolicy(c.Param("group")); err != nil {
 		common.ApiError(c, err)
 		return
