@@ -85,14 +85,12 @@ const (
 	ErrorCodeUpdateDataError ErrorCode = "update_data_error"
 
 	// quota error
-	ErrorCodeInsufficientUserQuota       ErrorCode = "insufficient_user_quota"
-	ErrorCodePreConsumeTokenQuotaFailed  ErrorCode = "pre_consume_token_quota_failed"
-	ErrorCodeEntitlementRequired         ErrorCode = "entitlement_required"
-	ErrorCodeEntitlementInactive         ErrorCode = "entitlement_inactive"
-	ErrorCodeEntitlementDailyLimit       ErrorCode = "entitlement_daily_limit_exceeded"
-	ErrorCodeEntitlementTotalLimit       ErrorCode = "entitlement_total_limit_exceeded"
-	ErrorCodeTokenConcurrencyLimit       ErrorCode = "token_concurrency_limit_reached"
-	ErrorCodeTokenConcurrencyUnavailable ErrorCode = "token_concurrency_unavailable"
+	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
+	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
+	ErrorCodeEntitlementRequired        ErrorCode = "entitlement_required"
+	ErrorCodeEntitlementInactive        ErrorCode = "entitlement_inactive"
+	ErrorCodeEntitlementDailyLimit      ErrorCode = "entitlement_daily_limit_exceeded"
+	ErrorCodeEntitlementTotalLimit      ErrorCode = "entitlement_total_limit_exceeded"
 )
 
 type NewAPIError struct {
