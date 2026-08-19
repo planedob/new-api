@@ -103,6 +103,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		adminInfo["is_multi_key"] = true
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
+	AppendChannelAffinityAdminInfo(c, adminInfo)
 	other["admin_info"] = adminInfo
 
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
