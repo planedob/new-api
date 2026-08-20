@@ -38,6 +38,34 @@ func TestImage2SmartRouterDisabledKeepsLegacyPath(t *testing.T) {
 	require.Nil(t, router)
 }
 
+func TestImage2LegacyRouteModeKeepsLegacyPathWhenSmartRoutingIsEnabled(t *testing.T) {
+	oldEnabled := common.Image2SmartRoutingEnabled
+	oldMode := common.Image2RouteMode
+	common.Image2SmartRoutingEnabled = true
+	common.Image2RouteMode = common.Image2RouteModeLegacy
+	t.Cleanup(func() {
+		common.Image2SmartRoutingEnabled = oldEnabled
+		common.Image2RouteMode = oldMode
+	})
+
+	c, _ := gin.CreateTestContext(nil)
+	router, err := NewImage2SmartRouter(c, &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		RelayMode:       relayconstant.RelayModeImagesGenerations,
+	}, &dto.ImageRequest{Size: "1024x1024"})
+
+	require.NoError(t, err)
+	require.Nil(t, router)
+}
+
+func TestImage2UnknownRouteModeRemainsAdvanced(t *testing.T) {
+	oldMode := common.Image2RouteMode
+	common.Image2RouteMode = "not-a-mode"
+	t.Cleanup(func() { common.Image2RouteMode = oldMode })
+
+	require.Equal(t, common.Image2RouteModeAdvanced, Image2RouteMode())
+}
+
 func TestImage2SmartRouterSpecificChannelKeepsPinnedLegacyPath(t *testing.T) {
 	old := common.Image2SmartRoutingEnabled
 	common.Image2SmartRoutingEnabled = true
