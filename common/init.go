@@ -116,6 +116,7 @@ func InitEnv() {
 		SafeFailoverImageGuardSeconds = 60
 	}
 	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
+	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeAdvanced))
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
 	// Initialize string variables with GetEnvOrDefaultString
@@ -139,6 +140,19 @@ func InitEnv() {
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
 	initConstantEnv()
+}
+
+func normalizeImage2RouteMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case Image2RouteModeLegacy:
+		return Image2RouteModeLegacy
+	case Image2RouteModeAdvanced:
+		return Image2RouteModeAdvanced
+	default:
+		// An invalid environment value must not silently activate a looser
+		// routing policy. Preserve the existing capability-strict behaviour.
+		return Image2RouteModeAdvanced
+	}
 }
 
 func initConstantEnv() {
