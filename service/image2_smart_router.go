@@ -41,7 +41,20 @@ type Image2SmartRouter struct {
 	decisions  []Image2CandidateDecision
 }
 
-func Image2SmartRoutingEnabled() bool { return common.Image2SmartRoutingEnabled }
+func Image2RouteMode() string {
+	if common.Image2RouteMode == common.Image2RouteModeLegacy {
+		return common.Image2RouteModeLegacy
+	}
+	return common.Image2RouteModeAdvanced
+}
+
+// Image2SmartRoutingEnabled requires both the existing opt-in gate and a
+// non-legacy route mode. legacy is intentionally an emergency selector
+// rollback: it leaves the original channel chooser in charge without changing
+// channel capabilities, retry rules, or the global feature switch.
+func Image2SmartRoutingEnabled() bool {
+	return common.Image2SmartRoutingEnabled && Image2RouteMode() != common.Image2RouteModeLegacy
+}
 
 func IsImage2SmartRoute(info *relaycommon.RelayInfo) bool {
 	return info != nil && strings.EqualFold(strings.TrimSpace(info.OriginModelName), "gpt-image-2") &&

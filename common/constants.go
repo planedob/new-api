@@ -150,6 +150,16 @@ var SafeFailoverImageGuardSeconds = 60
 // It defaults off so a deployment preserves the established channel selector.
 var Image2SmartRoutingEnabled = false
 
+// Image2RouteMode is a second, explicit Image2 rollback control. It does not
+// enable smart routing on its own: IMAGE2_SMART_ROUTING_ENABLED must still be
+// true before the capability router can be used.
+const (
+	Image2RouteModeAdvanced = "advanced"
+	Image2RouteModeLegacy   = "legacy"
+)
+
+var Image2RouteMode = Image2RouteModeAdvanced
+
 // EntitlementFeatureEnabled gates the directed entitlement enforcement path.
 // Operators can set ENTITLEMENT_FEATURE_ENABLED=false for an emergency rollback
 // without deleting package, user-grant or token-grant records.
