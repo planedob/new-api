@@ -50,6 +50,7 @@ import {
   buildApiPayload,
   buildImagePayload,
   isGptImage2Model,
+  isBananaImageModel,
   encodeToBase64,
 } from '../../helpers';
 
@@ -414,7 +415,9 @@ const Playground = () => {
       return;
     }
 
-    // 默认聊天模式（包括香蕉系列）
+    // Gemini 香蕉图片模型只支持非流式 generateContent。强制关闭流式，
+    // 避免上游收到 streamGenerateContent 后返回“Only ':generateContent' is supported”。
+    const isBananaImage = isBananaImageModel(inputs.model);
 
     setMessage((prevMessage) => {
       const newMessages = [...prevMessage, userMessageWithImages];
@@ -422,10 +425,10 @@ const Playground = () => {
       const payload = buildApiPayload(
         newMessages,
         null,
-        inputs,
+        isBananaImage ? { ...inputs, stream: false } : inputs,
         parameterEnabled,
       );
-      sendRequest(payload, inputs.stream);
+      sendRequest(payload, isBananaImage ? false : inputs.stream);
 
       // 禁用图片模式
       if (inputs.imageEnabled) {

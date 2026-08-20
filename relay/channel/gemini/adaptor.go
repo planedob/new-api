@@ -161,11 +161,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	}
 
 	action := "generateContent"
-	if info.IsStream {
+	// Gemini image-generation models return inline image data through the
+	// non-streaming generateContent action. Some compatible upstreams reject
+	// streamGenerateContent for these models with a misleading 404, so do not
+	// let a client-side stream=true select the wrong upstream action.
+	isImageModel := model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName)
+	if info.IsStream && !isImageModel {
 		action = "streamGenerateContent?alt=sse"
 		if info.RelayMode == constant.RelayModeGemini {
 			info.DisablePing = true
 		}
+	} else if isImageModel {
+		info.IsStream = false
 	}
 	return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
 }
