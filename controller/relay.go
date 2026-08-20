@@ -647,7 +647,7 @@ func RelayTask(c *gin.Context) {
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 
-		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetryTaskRelay(c, channel, taskErr, common.RetryTimes-retryParam.GetRetry()) {
 			break
 		}
 	}
@@ -699,8 +699,14 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 	c.JSON(taskErr.StatusCode, taskErr)
 }
 
-func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {
+func shouldRetryTaskRelay(c *gin.Context, channel *model.Channel, taskErr *dto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
+		return false
+	}
+	// SecureSkill MiniMax H3 task creation is also non-idempotent: a provider
+	// 5xx/timeout can arrive after the POST has been accepted.  Never replay
+	// that POST (or charge a second time) through the generic retry loop.
+	if channel != nil && channel.Type == constant.ChannelTypeSecureSkill {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {

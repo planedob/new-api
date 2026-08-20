@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel/task/secureskill"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -109,6 +110,17 @@ func VideoProxy(c *gin.Context) {
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
 		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
 		req.Header.Set("Authorization", "Bearer "+channel.Key)
+	case constant.ChannelTypeSecureSkill:
+		configuredBaseURL := channel.GetBaseURL()
+		if strings.TrimSpace(configuredBaseURL) == "" {
+			videoProxyError(c, http.StatusBadGateway, "server_error", "SecureSkill base URL is not configured")
+			return
+		}
+		videoURL = secureskill.BuildContentURL(configuredBaseURL, task.GetUpstreamTaskID())
+		if err := setSecureSkillContentAuthorization(req, task, channel); err != nil {
+			videoProxyError(c, http.StatusInternalServerError, "server_error", "API key not available for task")
+			return
+		}
 	default:
 		// Video URL is stored in PrivateData.ResultURL (fallback to FailReason for old data)
 		videoURL = task.GetResultURL()
@@ -169,6 +181,24 @@ func VideoProxy(c *gin.Context) {
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
 	}
+}
+
+// setSecureSkillContentAuthorization binds the read-only content request to
+// the key selected when the task was created.  Older tasks have no snapshot
+// and safely fall back to the channel key for backward compatibility.
+func setSecureSkillContentAuthorization(req *http.Request, task *model.Task, channel *model.Channel) error {
+	if req == nil || task == nil || channel == nil {
+		return fmt.Errorf("task, channel, and request are required")
+	}
+	apiKey := strings.TrimSpace(task.PrivateData.Key)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(channel.Key)
+	}
+	if apiKey == "" {
+		return fmt.Errorf("API key not available for task")
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	return nil
 }
 
 func writeVideoDataURL(c *gin.Context, dataURL string) error {

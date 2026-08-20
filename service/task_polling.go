@@ -353,6 +353,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		logger.LogError(ctx, fmt.Sprintf("Task %s not found in taskM", taskId))
 		return fmt.Errorf("task %s not found", taskId)
 	}
+	// SecureSkill H3 tasks are terminal once persisted as SUCCESS/FAILURE.
+	// Do not let a stale provider response or duplicate worker turn a
+	// completed task back into another terminal state.  Other video channels
+	// retain their existing polling behavior.
+	if ch.Type == constant.ChannelTypeSecureSkill && isTerminalVideoTaskStatus(task.Status) {
+		return nil
+	}
 	key := ch.Key
 
 	privateData := task.PrivateData
@@ -460,7 +467,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.FailReason = taskResult.Reason
 		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
 		taskResult.Progress = taskcommon.ProgressComplete
-		if quota != 0 {
+		// SecureSkill H3 must not refund a duplicate/stale terminal poll. Keep
+		// the legacy refund behavior for every other video channel; changing
+		// their late SUCCESS -> FAILURE semantics is outside this candidate.
+		if quota != 0 && (ch.Type != constant.ChannelTypeSecureSkill ||
+			(snap.Status != model.TaskStatusFailure && snap.Status != model.TaskStatusSuccess)) {
 			shouldRefund = true
 		}
 	default:
@@ -499,6 +510,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func isTerminalVideoTaskStatus(status model.TaskStatus) bool {
+	return status == model.TaskStatusSuccess || status == model.TaskStatusFailure
 }
 
 func redactVideoResponseBody(body []byte) []byte {
