@@ -2,16 +2,24 @@ package openai
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDetectImageMimeTypeFromFileUsesBytesNotFilename(t *testing.T) {
@@ -133,4 +141,152 @@ func TestOpenaiHandlerWithUsageAcceptsURLOrBase64ImageData(t *testing.T) {
 			}
 		})
 	}
+}
+
+func image2OpenAIRequestContext(t *testing.T, path, requestID string, body io.Reader, contentType string) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, path, body)
+	c.Request.Header.Set("Content-Type", contentType)
+	c.Request.Header.Set("X-Request-ID", requestID)
+	c.Set(common.RequestIdKey, requestID)
+	c.Header(common.RequestIdKey, requestID)
+	return c, recorder
+}
+
+func image2OpenAIInfo(baseURL, path, requestID string, mode int) *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		RequestURLPath:  path,
+		OriginModelName: "gpt-image-2",
+		RequestId:       requestID,
+		RelayMode:       mode,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:    constant.ChannelTypeOpenAI,
+			ChannelBaseUrl: baseURL,
+			ApiKey:         "fake-upstream-key",
+			HeadersOverride: map[string]interface{}{
+				"re:(?i)^X-Request-ID$": "",
+			},
+			ChannelSetting: dto.ChannelSettings{},
+		},
+	}
+}
+
+func TestImage2FakeUpstreamGenerationIsCalledOnceAndKeepsRequestID(t *testing.T) {
+	service.InitHttpClient()
+	requestID := "image2-generation-request-1"
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		require.Equal(t, "/v1/images/generations", r.URL.Path)
+		require.Equal(t, requestID, r.Header.Get("X-Request-ID"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"created":1,"data":[{"b64_json":"ZmFrZS1nZW5lcmF0aW9u"}]}`)
+	}))
+	defer server.Close()
+
+	body := strings.NewReader(`{"model":"gpt-image-2","prompt":"a fake image","size":"1024x1024"}`)
+	c, recorder := image2OpenAIRequestContext(t, "/v1/images/generations", requestID, body, "application/json")
+	info := image2OpenAIInfo(server.URL, "/v1/images/generations", requestID, relayconstant.RelayModeImagesGenerations)
+	adaptor := &Adaptor{}
+
+	converted, err := adaptor.ConvertImageRequest(c, info, dto.ImageRequest{Model: "gpt-image-2", Prompt: "a fake image", Size: "1024x1024"})
+	require.NoError(t, err)
+	convertedJSON, err := common.Marshal(converted)
+	require.NoError(t, err)
+	responseAny, err := adaptor.DoRequest(c, info, bytes.NewReader(convertedJSON))
+	require.NoError(t, err)
+	response := responseAny.(*http.Response)
+	usage, apiErr := adaptor.DoResponse(c, response, info)
+	if apiErr != nil {
+		t.Fatalf("generation response error: %s", apiErr.Error())
+	}
+	require.NotNil(t, usage)
+	require.Equal(t, 1, calls)
+	require.Equal(t, requestID, c.GetString(common.RequestIdKey))
+	require.Equal(t, requestID, c.Writer.Header().Get(common.RequestIdKey))
+	require.Contains(t, recorder.Body.String(), "ZmFrZS1nZW5lcmF0aW9u")
+
+	accepted := service.EvaluateSafeFailover(service.SafeFailoverInput{
+		RelayMode:  relayconstant.RelayModeImagesGenerations,
+		ModelName:  "gpt-image-2",
+		Error:      types.NewErrorWithStatusCode(errors.New("upstream accepted job_id=fake-1"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway),
+		ImageGuard: time.Minute,
+	})
+	require.False(t, accepted.Retry)
+	require.Equal(t, "upstream_accepted", accepted.Reason)
+
+	written := service.EvaluateSafeFailover(service.SafeFailoverInput{
+		RelayMode:       relayconstant.RelayModeImagesGenerations,
+		ModelName:       "gpt-image-2",
+		ResponseWritten: true,
+		Error:           types.NewErrorWithStatusCode(errors.New("late upstream failure"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway),
+	})
+	require.False(t, written.Retry)
+	require.Equal(t, "response_started", written.Reason)
+	require.Equal(t, 1, calls, "accepted or written responses must not trigger a replay")
+}
+
+func TestImage2FakeUpstreamEditsIsCalledOnceAndReturnsNonEmptyImage(t *testing.T) {
+	service.InitHttpClient()
+	requestID := "image2-edits-request-1"
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		require.Equal(t, "/v1/images/edits", r.URL.Path)
+		require.Equal(t, requestID, r.Header.Get("X-Request-ID"))
+		require.Contains(t, r.Header.Get("Content-Type"), "multipart/form-data")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"created":1,"data":[{"url":"https://fake.invalid/edited.png"}]}`)
+	}))
+	defer server.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "gpt-image-2"))
+	require.NoError(t, writer.WriteField("prompt", "edit this fake image"))
+	part, err := writer.CreateFormFile("image", "reference.jpg")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfake-payload"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	c, recorder := image2OpenAIRequestContext(t, "/v1/images/edits", requestID, bytes.NewReader(body.Bytes()), writer.FormDataContentType())
+	info := image2OpenAIInfo(server.URL, "/v1/images/edits", requestID, relayconstant.RelayModeImagesEdits)
+	adaptor := &Adaptor{}
+
+	converted, err := adaptor.ConvertImageRequest(c, info, dto.ImageRequest{Model: "gpt-image-2"})
+	require.NoError(t, err)
+	responseAny, err := adaptor.DoRequest(c, info, converted.(io.Reader))
+	require.NoError(t, err)
+	response := responseAny.(*http.Response)
+	usage, apiErr := adaptor.DoResponse(c, response, info)
+	if apiErr != nil {
+		t.Fatalf("edit response error: %s", apiErr.Error())
+	}
+	require.NotNil(t, usage)
+	require.Equal(t, 1, calls)
+	require.Equal(t, requestID, c.GetString(common.RequestIdKey))
+	require.Equal(t, requestID, c.Writer.Header().Get(common.RequestIdKey))
+	require.Contains(t, recorder.Body.String(), "edited.png")
+
+	accepted := service.EvaluateSafeFailover(service.SafeFailoverInput{
+		RelayMode:  relayconstant.RelayModeImagesEdits,
+		ModelName:  "gpt-image-2",
+		Error:      types.NewErrorWithStatusCode(errors.New("upstream accepted operation_id=fake-edit-1"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway),
+		ImageGuard: time.Minute,
+	})
+	require.False(t, accepted.Retry)
+	require.Equal(t, "upstream_accepted", accepted.Reason)
+
+	written := service.EvaluateSafeFailover(service.SafeFailoverInput{
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+		ModelName:       "gpt-image-2",
+		ResponseWritten: true,
+		Error:           types.NewErrorWithStatusCode(errors.New("late upstream failure"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway),
+	})
+	require.False(t, written.Retry)
+	require.Equal(t, "response_started", written.Reason)
+	require.Equal(t, 1, calls, "accepted or written edit responses must not trigger a replay")
 }
