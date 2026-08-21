@@ -188,3 +188,85 @@ func TestImage2ControllerRelayToFakeUpstreamSettlesBillingSessionOnce(t *testing
 	require.Equal(t, user.Quota+user.UsedQuota, 1000000)
 	require.Equal(t, 1, user.RequestCount)
 }
+
+func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T) {
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldBatchUpdateEnabled := common.BatchUpdateEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	oldSafeFailover := common.SafeFailoverV1Enabled
+	oldMaxAttempts := common.SafeFailoverMaxAttempts
+	oldImageGuard := common.SafeFailoverImageGuardSeconds
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.BatchUpdateEnabled = oldBatchUpdateEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+		common.SafeFailoverV1Enabled = oldSafeFailover
+		common.SafeFailoverMaxAttempts = oldMaxAttempts
+		common.SafeFailoverImageGuardSeconds = oldImageGuard
+	})
+
+	db, err := gorm.Open(sqlite.Open("file:image2_controller_replay_guard?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}))
+	require.NoError(t, db.Create(&model.User{Id: 43, Username: "image2-replay-test", Quota: 1000000}).Error)
+	model.DB, model.LOG_DB = db, db
+	common.RedisEnabled = false
+	common.BatchUpdateEnabled = false
+	common.LogConsumeEnabled = false
+	common.QuotaRemindThreshold = 0
+	common.SafeFailoverV1Enabled = true
+	common.SafeFailoverMaxAttempts = 2
+	common.SafeFailoverImageGuardSeconds = 60
+	service.InitHttpClient()
+
+	requestID := "image2-controller-replay-guard-1"
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		require.Equal(t, "/v1/images/generations", r.URL.Path)
+		require.Equal(t, requestID, r.Header.Get("X-Request-ID"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, `{"error":{"message":"job_id=fake-job-1 queued"}}`)
+	}))
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/pg/images/generations", strings.NewReader(`{"model":"gpt-image-2","prompt":"accepted fake controller image","size":"1024x1024"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("X-Request-ID", requestID)
+	c.Set(common.RequestIdKey, requestID)
+	c.Set(string(constant.ContextKeyUserId), 43)
+	c.Set(string(constant.ContextKeyUserQuota), 1000000)
+	c.Set(string(constant.ContextKeyUserGroup), "default")
+	c.Set(string(constant.ContextKeyUsingGroup), "default")
+	c.Set(string(constant.ContextKeyUserSetting), dto.UserSetting{BillingPreference: "wallet_only", AcceptUnsetRatioModel: true})
+	c.Set(string(constant.ContextKeyOriginalModel), "gpt-image-2")
+	c.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeOpenAI)
+	c.Set(string(constant.ContextKeyChannelBaseUrl), server.URL)
+	c.Set(string(constant.ContextKeyChannelKey), "fake-upstream-key")
+	c.Set(string(constant.ContextKeyChannelId), 93)
+	c.Set(string(constant.ContextKeyChannelName), "image2-controller-replay-fake")
+	c.Set(string(constant.ContextKeyChannelSetting), dto.ChannelSettings{})
+	c.Set(string(constant.ContextKeyChannelOtherSetting), dto.ChannelOtherSettings{})
+	c.Set(string(constant.ContextKeyChannelParamOverride), map[string]interface{}{})
+	c.Set(string(constant.ContextKeyChannelHeaderOverride), map[string]interface{}{"X-Request-ID": requestID})
+	c.Set(string(constant.ContextKeyChannelIsMultiKey), false)
+	c.Set(string(constant.ContextKeyChannelAutoBan), false)
+	c.Set(string(constant.ContextKeyChannelStatusCodeMapping), "")
+	c.Set(string(constant.ContextKeyTokenUnlimited), true)
+	c.Set(string(constant.ContextKeyTokenKey), "playground-token")
+	c.Set(string(constant.ContextKeyTokenGroup), "default")
+	c.Set(string(constant.ContextKeyRequestStartTime), time.Now())
+
+	controller.Relay(c, types.RelayFormatOpenAIImage)
+	require.Equal(t, 1, calls, "queued upstream acceptance must not enter a second controller attempt")
+	require.Eventually(t, func() bool {
+		var user model.User
+		if db.First(&user, 43).Error != nil {
+			return false
+		}
+		return user.Quota == 1000000
+	}, time.Second, 10*time.Millisecond, "failed accepted request must refund its precharge once")
+}
