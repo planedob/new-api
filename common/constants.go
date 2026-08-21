@@ -156,7 +156,10 @@ var Image2SmartRoutingEnabled = false
 // true before the capability router can be used.
 const (
 	Image2RouteModeAdvanced = "advanced"
-	Image2RouteModeLegacy   = "legacy"
+	// Image2RouteModeObserve evaluates capability compatibility and emits the
+	// decision summary without changing the legacy channel selector.
+	Image2RouteModeObserve = "observe"
+	Image2RouteModeLegacy  = "legacy"
 )
 
 var Image2RouteMode = Image2RouteModeAdvanced
