@@ -3,12 +3,16 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"mime/multipart"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -192,6 +196,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			formData := url.Values(form.Value)
 			c.Request.MultipartForm = form
 			c.Request.PostForm = formData
+			if err := validateImage2MultipartForm(form); err != nil {
+				return nil, err
+			}
 			imageRequest.Prompt = formData.Get("prompt")
 			imageRequest.Model = formData.Get("model")
 			if nValue := strings.TrimSpace(formData.Get("n")); nValue != "" {
@@ -223,9 +230,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 				imageRequest.N = common.GetPointer(uint(1))
 			}
 
-			hasWatermark := formData.Has("watermark")
+			_, hasWatermark := values["watermark"]
 			if hasWatermark {
-				watermark := formData.Get("watermark") == "true"
+				watermark := values.Get("watermark") == "true"
 				imageRequest.Watermark = &watermark
 			}
 			break
@@ -284,6 +291,79 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	}
 
 	return imageRequest, nil
+}
+
+const defaultImage2MaxInputMB = 50
+
+// validateImage2MultipartForm validates the bytes, not the client supplied
+// filename or Content-Type header. This prevents empty files and extension
+// spoofing from reaching an upstream and gives all Image2 providers the same
+// fail-closed input contract.
+func validateImage2MultipartForm(form *multipart.Form) error {
+	if form == nil || form.File == nil {
+		return errors.New("image is required")
+	}
+
+	imageFiles := form.File["image"]
+	if len(imageFiles) == 0 {
+		imageFiles = form.File["image[]"]
+	}
+	if len(imageFiles) == 0 {
+		for fieldName, files := range form.File {
+			if strings.HasPrefix(fieldName, "image[") {
+				imageFiles = append(imageFiles, files...)
+			}
+		}
+	}
+	if len(imageFiles) == 0 {
+		return errors.New("image is required")
+	}
+	for index, fileHeader := range imageFiles {
+		if err := validateImage2FileHeader(fileHeader, "image", index); err != nil {
+			return err
+		}
+	}
+
+	for index, fileHeader := range form.File["mask"] {
+		if err := validateImage2FileHeader(fileHeader, "mask", index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateImage2FileHeader(fileHeader *multipart.FileHeader, fieldName string, index int) error {
+	if fileHeader == nil || fileHeader.Size <= 0 {
+		return fmt.Errorf("%s file %d is empty", fieldName, index)
+	}
+	maxMB := constant.MaxImage2InputMB
+	if maxMB <= 0 {
+		maxMB = defaultImage2MaxInputMB
+	}
+	if fileHeader.Size > int64(maxMB)<<20 {
+		return fmt.Errorf("%w: %s file %d exceeds %d MB", common.ErrRequestBodyTooLarge, fieldName, index, maxMB)
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open %s file %d: %w", fieldName, index, err)
+	}
+	defer file.Close()
+
+	header, err := io.ReadAll(io.LimitReader(file, 512))
+	if err != nil {
+		return fmt.Errorf("failed to read %s file %d: %w", fieldName, index, err)
+	}
+	if len(header) == 0 {
+		return fmt.Errorf("%s file %d is empty", fieldName, index)
+	}
+	mimeType := http.DetectContentType(header)
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/webp":
+		return nil
+	default:
+		return fmt.Errorf("%s file %d has unsupported image content", fieldName, index)
+	}
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
-	"path/filepath"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -513,8 +512,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 					fieldName = "image[]"
 				}
 
-				// Determine MIME type based on file extension
-				mimeType := detectImageMimeType(fileHeader.Filename)
+				// Derive MIME from the bytes rather than trusting the filename.
+				mimeType, err := detectImageMimeTypeFromFile(file)
+				if err != nil {
+					_ = file.Close()
+					return nil, fmt.Errorf("detect image MIME type for file %d: %w", i, err)
+				}
 
 				// Create a form file with the appropriate content type
 				h := make(textproto.MIMEHeader)
@@ -542,8 +545,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				}
 				// 复制完立即关闭，避免在循环内使用 defer 占用资源
 
-				// Determine MIME type for mask file
-				mimeType := detectImageMimeType(maskFiles[0].Filename)
+				// Derive MIME from the mask bytes rather than trusting the filename.
+				mimeType, err := detectImageMimeTypeFromFile(maskFile)
+				if err != nil {
+					_ = maskFile.Close()
+					return nil, fmt.Errorf("detect mask MIME type: %w", err)
+				}
 
 				// Create a form file with the appropriate content type
 				h := make(textproto.MIMEHeader)
@@ -581,23 +588,25 @@ func isJSONRequest(c *gin.Context) bool {
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
 }
 
-// detectImageMimeType determines the MIME type based on the file extension
-func detectImageMimeType(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".webp":
-		return "image/webp"
+// detectImageMimeTypeFromFile derives an allowed image MIME from the first
+// bytes and rewinds the file so the caller can copy the complete payload.
+func detectImageMimeTypeFromFile(file multipart.File) (string, error) {
+	header, err := io.ReadAll(io.LimitReader(file, 512))
+	if err != nil {
+		return "", err
+	}
+	if len(header) == 0 {
+		return "", errors.New("image file is empty")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind image file: %w", err)
+	}
+	mimeType := http.DetectContentType(header)
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/webp":
+		return mimeType, nil
 	default:
-		// Try to detect from extension if possible
-		if strings.HasPrefix(ext, ".jp") {
-			return "image/jpeg"
-		}
-		// Default to png as a fallback
-		return "image/png"
+		return "", fmt.Errorf("unsupported image content type %s", mimeType)
 	}
 }
 
