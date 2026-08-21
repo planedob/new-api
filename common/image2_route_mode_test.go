@@ -1,6 +1,18 @@
 package common
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
+
+func TestImage2SmartRoutingDefaultIsDisabledWhenUnset(t *testing.T) {
+	if _, exists := os.LookupEnv("IMAGE2_SMART_ROUTING_ENABLED"); exists {
+		t.Skip("startup default assertion requires IMAGE2_SMART_ROUTING_ENABLED to be unset")
+	}
+	if Image2SmartRoutingEnabled {
+		t.Fatal("Image2 smart routing must default to disabled when the environment variable is unset")
+	}
+}
 
 func TestNormalizeImage2RouteMode(t *testing.T) {
 	for _, test := range []struct {
