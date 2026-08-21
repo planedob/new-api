@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,122 @@ func TestImage2ControllerRelayToFakeUpstreamSettlesBillingSessionOnce(t *testing
 	// handler settles its precharge using the usage returned by the adaptor.
 	require.Equal(t, user.Quota+user.UsedQuota, 1000000)
 	require.Equal(t, 1, user.RequestCount)
+}
+
+func TestImage2ControllerRejectsNoCompatibleCandidateBeforeBilling(t *testing.T) {
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldBatchUpdateEnabled := common.BatchUpdateEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+	oldUsingMySQL := common.UsingMySQL
+	oldIsMasterNode := common.IsMasterNode
+	oldSQLitePath := common.SQLitePath
+	oldSQLDSN, hadSQLDSN := os.LookupEnv("SQL_DSN")
+	oldSmartRoutingEnabled := common.Image2SmartRoutingEnabled
+	oldRouteMode := common.Image2RouteMode
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.BatchUpdateEnabled = oldBatchUpdateEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+		common.UsingMySQL = oldUsingMySQL
+		common.IsMasterNode = oldIsMasterNode
+		common.SQLitePath = oldSQLitePath
+		if hadSQLDSN {
+			_ = os.Setenv("SQL_DSN", oldSQLDSN)
+		} else {
+			_ = os.Unsetenv("SQL_DSN")
+		}
+		common.Image2SmartRoutingEnabled = oldSmartRoutingEnabled
+		common.Image2RouteMode = oldRouteMode
+	})
+
+	common.SQLitePath = "file:image2_controller_no_candidate?mode=memory&cache=shared"
+	require.NoError(t, os.Setenv("SQL_DSN", "local"))
+	common.UsingSQLite = false
+	common.UsingPostgreSQL = false
+	common.UsingMySQL = false
+	common.IsMasterNode = true
+	require.NoError(t, model.InitDB())
+	db := model.DB
+	require.NotNil(t, db)
+	require.NoError(t, db.Create(&model.User{Id: 44, Username: "image2-no-candidate-test", Quota: 1000000}).Error)
+
+	baseURL := "http://127.0.0.1:1"
+	priority := int64(10)
+	autoBan := 0
+	channel := &model.Channel{
+		Id:       95,
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "isolated-no-candidate-key",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "image2-incompatible-loopback",
+		BaseURL:  &baseURL,
+		Group:    "default",
+		Models:   "gpt-image-2",
+		Priority: &priority,
+		AutoBan:  &autoBan,
+	}
+	channel.SetSetting(dto.ChannelSettings{Image2Capability: &dto.Image2ChannelCapability{
+		Enabled: true, Operations: []string{"generations"}, Resolutions: []string{"uhd"}, RoutePriority: 10,
+	}})
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "gpt-image-2", ChannelId: channel.Id, Enabled: true, Priority: &priority,
+	}).Error)
+
+	model.DB, model.LOG_DB = db, db
+	common.RedisEnabled = false
+	common.BatchUpdateEnabled = false
+	common.LogConsumeEnabled = false
+	common.QuotaRemindThreshold = 0
+	common.UsingSQLite = true
+	common.UsingPostgreSQL = false
+	common.Image2SmartRoutingEnabled = true
+	common.Image2RouteMode = common.Image2RouteModeAdvanced
+	service.InitHttpClient()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/pg/images/generations", strings.NewReader(`{"model":"gpt-image-2","prompt":"no compatible candidate","size":"1024x1024"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("X-Request-ID", "image2-no-candidate-1")
+	c.Set(common.RequestIdKey, "image2-no-candidate-1")
+	c.Set(string(constant.ContextKeyUserId), 44)
+	c.Set(string(constant.ContextKeyUserQuota), 1000000)
+	c.Set(string(constant.ContextKeyUserGroup), "default")
+	c.Set(string(constant.ContextKeyUsingGroup), "default")
+	c.Set(string(constant.ContextKeyUserSetting), dto.UserSetting{BillingPreference: "wallet_only", AcceptUnsetRatioModel: true})
+	c.Set(string(constant.ContextKeyOriginalModel), "gpt-image-2")
+	c.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeOpenAI)
+	c.Set(string(constant.ContextKeyChannelBaseUrl), baseURL)
+	c.Set(string(constant.ContextKeyChannelKey), "isolated-no-candidate-key")
+	c.Set(string(constant.ContextKeyChannelId), channel.Id)
+	c.Set(string(constant.ContextKeyChannelName), channel.Name)
+	c.Set(string(constant.ContextKeyChannelSetting), channel.GetSetting())
+	c.Set(string(constant.ContextKeyChannelOtherSetting), dto.ChannelOtherSettings{})
+	c.Set(string(constant.ContextKeyChannelParamOverride), map[string]interface{}{})
+	c.Set(string(constant.ContextKeyChannelHeaderOverride), map[string]interface{}{})
+	c.Set(string(constant.ContextKeyChannelIsMultiKey), false)
+	c.Set(string(constant.ContextKeyChannelAutoBan), false)
+	c.Set(string(constant.ContextKeyChannelStatusCodeMapping), "")
+	c.Set(string(constant.ContextKeyTokenUnlimited), true)
+	c.Set(string(constant.ContextKeyTokenKey), "isolated-no-candidate-token")
+	c.Set(string(constant.ContextKeyTokenGroup), "default")
+	c.Set(string(constant.ContextKeyRequestStartTime), time.Now())
+
+	controller.Relay(c, types.RelayFormatOpenAIImage)
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "no compatible Image2 channel")
+	require.NotContains(t, c.GetStringSlice("use_channel"), "95")
+
+	var user model.User
+	require.NoError(t, db.First(&user, 44).Error)
+	require.Equal(t, 1000000, user.Quota, "no-candidate rejection must happen before pre-consume")
+	require.Equal(t, 0, user.UsedQuota)
+	require.Equal(t, 0, user.RequestCount)
 }
 
 func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T) {
