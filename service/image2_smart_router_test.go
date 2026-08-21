@@ -58,6 +58,20 @@ func TestImage2LegacyRouteModeKeepsLegacyPathWhenSmartRoutingIsEnabled(t *testin
 	require.Nil(t, router)
 }
 
+func TestImage2ObserveRouteModeDoesNotEnableEnforcement(t *testing.T) {
+	oldEnabled := common.Image2SmartRoutingEnabled
+	oldMode := common.Image2RouteMode
+	common.Image2SmartRoutingEnabled = true
+	common.Image2RouteMode = common.Image2RouteModeObserve
+	t.Cleanup(func() {
+		common.Image2SmartRoutingEnabled = oldEnabled
+		common.Image2RouteMode = oldMode
+	})
+
+	require.False(t, Image2SmartRoutingEnabled())
+	require.True(t, Image2SmartRoutingObserveEnabled())
+}
+
 func TestImage2UnknownRouteModeRemainsAdvanced(t *testing.T) {
 	oldMode := common.Image2RouteMode
 	common.Image2RouteMode = "not-a-mode"
@@ -194,6 +208,7 @@ func TestImage2SmartRouterFallsBackOnlyWhenAllCapabilitiesAreMissing(t *testing.
 	_, routeErr := router.Next()
 	require.True(t, types.IsSkipRetryError(routeErr))
 	require.Contains(t, router.DecisionSummary(), "resolution_unsupported")
+	require.False(t, router.HasCandidates())
 }
 
 func TestImage2SmartRouterQualityFiltering(t *testing.T) {

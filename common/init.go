@@ -146,6 +146,8 @@ func normalizeImage2RouteMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case Image2RouteModeLegacy:
 		return Image2RouteModeLegacy
+	case Image2RouteModeObserve:
+		return Image2RouteModeObserve
 	case Image2RouteModeAdvanced:
 		return Image2RouteModeAdvanced
 	default:

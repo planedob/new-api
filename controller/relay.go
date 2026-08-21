@@ -127,13 +127,38 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if imageRequest, ok := request.(*dto.ImageRequest); ok {
 		image2Router, err = service.NewImage2SmartRouter(c, relayInfo, imageRequest)
 		if err != nil {
-			// Smart routing is an opt-in optimization. Any capability parsing,
-			// group resolution, or candidate lookup failure must preserve the
-			// established selector instead of rejecting a valid client request.
+			if service.Image2SmartRoutingEnabled() {
+				// Enforced capability routing must fail closed when its request,
+				// group, or candidate state cannot be evaluated. Falling back to
+				// legacy here would send the request to an unverified channel.
+				logger.LogWarn(c, fmt.Sprintf("image2 smart routing enforce unavailable; rejecting request: %s", err.Error()))
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("image2 routing is temporarily unavailable"),
+					types.ErrorCodeGetChannelFailed,
+					http.StatusServiceUnavailable,
+					types.ErrOptionWithSkipRetry(),
+				)
+				return
+			}
+			// Observe mode and the default legacy path preserve the established
+			// selector when capability evaluation is unavailable.
 			logger.LogWarn(c, fmt.Sprintf("image2 smart routing unavailable; using legacy routing: %s", err.Error()))
 			image2Router = nil
 		}
 		if image2Router != nil {
+			if !image2Router.HasCandidates() {
+				// Reject before ModelPriceHelper/PreConsumeBilling. This avoids
+				// billing and refund churn for a request no declared channel can
+				// safely serve.
+				logger.LogWarn(c, fmt.Sprintf("image2 smart routing has no compatible candidate for model %s", relayInfo.OriginModelName))
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("no compatible Image2 channel is currently available"),
+					types.ErrorCodeGetChannelFailed,
+					http.StatusServiceUnavailable,
+					types.ErrOptionWithSkipRetry(),
+				)
+				return
+			}
 			c.Set("image2_smart_router_active", true)
 		}
 	}

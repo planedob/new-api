@@ -42,18 +42,27 @@ type Image2SmartRouter struct {
 }
 
 func Image2RouteMode() string {
-	if common.Image2RouteMode == common.Image2RouteModeLegacy {
-		return common.Image2RouteModeLegacy
+	switch common.Image2RouteMode {
+	case common.Image2RouteModeLegacy, common.Image2RouteModeObserve:
+		return common.Image2RouteMode
+	default:
+		return common.Image2RouteModeAdvanced
 	}
-	return common.Image2RouteModeAdvanced
 }
 
-// Image2SmartRoutingEnabled requires both the existing opt-in gate and a
-// non-legacy route mode. legacy is intentionally an emergency selector
-// rollback: it leaves the original channel chooser in charge without changing
-// channel capabilities, retry rules, or the global feature switch.
+// Image2SmartRoutingEnabled requires both the existing opt-in gate and the
+// enforcing advanced route mode. legacy is intentionally an emergency
+// selector rollback; observe evaluates declarations without changing the
+// established selector.
 func Image2SmartRoutingEnabled() bool {
-	return common.Image2SmartRoutingEnabled && Image2RouteMode() != common.Image2RouteModeLegacy
+	return common.Image2SmartRoutingEnabled && Image2RouteMode() == common.Image2RouteModeAdvanced
+}
+
+// Image2SmartRoutingObserveEnabled evaluates the same capability contract as
+// advanced mode but leaves the established selector in charge. This gives an
+// operator a no-routing-change migration phase for capability declarations.
+func Image2SmartRoutingObserveEnabled() bool {
+	return common.Image2SmartRoutingEnabled && Image2RouteMode() == common.Image2RouteModeObserve
 }
 
 func IsImage2SmartRoute(info *relaycommon.RelayInfo) bool {
@@ -114,9 +123,22 @@ func image2Resolution(size string) (string, error) {
 // NewImage2SmartRouter filters every model-bound candidate before selecting.
 // Capability metadata is opt-in, therefore an unconfigured channel is safely
 // excluded rather than guessed to support a request.
-func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest) (*Image2SmartRouter, error) {
-	if !Image2SmartRoutingEnabled() || !IsImage2SmartRoute(info) {
+func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest) (router *Image2SmartRouter, err error) {
+	observe := Image2SmartRoutingObserveEnabled()
+	if (!Image2SmartRoutingEnabled() && !observe) || !IsImage2SmartRoute(info) {
 		return nil, nil
+	}
+	if observe {
+		// Observe is a side-channel migration aid. A bad capability declaration
+		// or evaluator panic must never take the established legacy request path
+		// down with it.
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.LogError(c, fmt.Sprintf("image2 smart routing observe evaluation panic: %v; legacy selector unchanged", recovered))
+				router = nil
+				err = nil
+			}
+		}()
 	}
 	if _, pinned := c.Get("specific_channel_id"); pinned {
 		// An administrator-selected channel is an explicit routing contract.
@@ -145,6 +167,20 @@ func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *
 		return nil, err
 	}
 	router, configured := newImage2SmartRouterIfConfigured(req, channels)
+	if observe {
+		if !configured {
+			logger.LogWarn(c, fmt.Sprintf(
+				"image2 smart routing observe: no configured capability in group %s; legacy selector unchanged",
+				group,
+			))
+			return nil, nil
+		}
+		logger.LogInfo(c, fmt.Sprintf(
+			"image2 smart routing observe: request=%s/%s quality=%q n=%d group=%s candidates=%s; legacy selector unchanged",
+			req.Operation, req.Resolution, req.Quality, req.N, group, router.DecisionSummary(),
+		))
+		return nil, nil
+	}
 	if !configured {
 		// A switch-only rollout must not turn a missing capability migration
 		// into a complete outage. Fall back only when no channel has opted in;
@@ -238,6 +274,14 @@ func (r *Image2SmartRouter) Next() (*model.Channel, *types.NewAPIError) {
 		}
 	}
 	return channel, nil
+}
+
+// HasCandidates reports whether capability filtering left at least one
+// eligible channel. The relay checks this before billing so an enforced
+// no-compatible-candidate result fails closed without a pre-consume/refund
+// cycle.
+func (r *Image2SmartRouter) HasCandidates() bool {
+	return r != nil && len(r.candidates) > 0
 }
 
 func (r *Image2SmartRouter) DecisionSummary() string {
