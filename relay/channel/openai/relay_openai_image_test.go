@@ -55,6 +55,44 @@ func TestDetectImageMimeTypeFromFileUsesBytesNotFilename(t *testing.T) {
 	}
 }
 
+func TestDetectImageMimeTypeFromFilePreservesCompletePayload(t *testing.T) {
+	original := append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), bytes.Repeat([]byte("payload"), 200)...)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("image", "reference.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	form, err := multipart.NewReader(bytes.NewReader(body.Bytes()), writer.Boundary()).ReadForm(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer form.RemoveAll()
+	file, err := form.File["image"][0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	if _, err := detectImageMimeTypeFromFile(file); err != nil {
+		t.Fatal(err)
+	}
+	copyAfterDetection, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(copyAfterDetection, original) {
+		t.Fatalf("payload changed after MIME detection: got %d bytes, want %d", len(copyAfterDetection), len(original))
+	}
+}
+
 func TestOpenaiHandlerWithUsageRejectsEmptyImageDataBeforeWritingResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

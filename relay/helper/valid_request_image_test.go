@@ -2,6 +2,7 @@ package helper
 
 import (
 	"bytes"
+	"encoding/json"
 	"mime/multipart"
 	"net/http/httptest"
 	"testing"
@@ -82,4 +83,23 @@ func TestGetAndValidOpenAIImageRequestRejectsOversizedImage(t *testing.T) {
 	_, err := GetAndValidOpenAIImageRequest(context, relayconstant.RelayModeImagesEdits)
 	require.Error(t, err)
 	require.ErrorIs(t, err, common.ErrRequestBodyTooLarge)
+}
+
+func TestGetAndValidOpenAIImageRequestKeepsGenerationJSONPath(t *testing.T) {
+	body, err := json.Marshal(map[string]any{
+		"model":  "gpt-image-2",
+		"prompt": "a purple square",
+		"size":   "1024x1024",
+	})
+	require.NoError(t, err)
+	request := httptest.NewRequest("POST", "/v1/images/generations", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = request
+
+	imageRequest, err := GetAndValidOpenAIImageRequest(context, relayconstant.RelayModeImagesGenerations)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-image-2", imageRequest.Model)
+	require.Equal(t, "a purple square", imageRequest.Prompt)
 }
