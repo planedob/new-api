@@ -196,6 +196,7 @@ func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T
 	oldSafeFailover := common.SafeFailoverV1Enabled
 	oldMaxAttempts := common.SafeFailoverMaxAttempts
 	oldImageGuard := common.SafeFailoverImageGuardSeconds
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = oldDB, oldLogDB
 		common.BatchUpdateEnabled = oldBatchUpdateEnabled
@@ -203,11 +204,12 @@ func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T
 		common.SafeFailoverV1Enabled = oldSafeFailover
 		common.SafeFailoverMaxAttempts = oldMaxAttempts
 		common.SafeFailoverImageGuardSeconds = oldImageGuard
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
 	})
 
 	db, err := gorm.Open(sqlite.Open("file:image2_controller_replay_guard?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}))
 	require.NoError(t, db.Create(&model.User{Id: 43, Username: "image2-replay-test", Quota: 1000000}).Error)
 	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false
@@ -217,19 +219,50 @@ func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T
 	common.SafeFailoverV1Enabled = true
 	common.SafeFailoverMaxAttempts = 2
 	common.SafeFailoverImageGuardSeconds = 60
+	common.MemoryCacheEnabled = false
 	service.InitHttpClient()
 
 	requestID := "image2-controller-replay-guard-1"
+	requestID2 := requestID + "-written"
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		require.Equal(t, "/v1/images/generations", r.URL.Path)
-		require.Equal(t, requestID, r.Header.Get("X-Request-ID"))
+		require.Contains(t, []string{requestID, requestID2}, r.Header.Get("X-Request-ID"))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = io.WriteString(w, `{"error":{"message":"job_id=fake-job-1 queued"}}`)
 	}))
 	defer server.Close()
+	var secondCalls int
+	secondServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"created":1,"data":[{"b64_json":"c2Vjb25kLWNoYW5uZWw"}]}`)
+	}))
+	defer secondServer.Close()
+	secondBaseURL := secondServer.URL
+	secondPriority := int64(0)
+	secondAutoBan := 0
+	require.NoError(t, db.Create(&model.Channel{
+		Id:       94,
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "fake-second-channel-key",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "image2-second-loopback-fake",
+		BaseURL:  &secondBaseURL,
+		Group:    "default",
+		Models:   "gpt-image-2",
+		Priority: &secondPriority,
+		AutoBan:  &secondAutoBan,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group:     "default",
+		Model:     "gpt-image-2",
+		ChannelId: 94,
+		Enabled:   true,
+		Priority:  &secondPriority,
+	}).Error)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -262,6 +295,7 @@ func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T
 
 	controller.Relay(c, types.RelayFormatOpenAIImage)
 	require.Equal(t, 1, calls, "queued upstream acceptance must not enter a second controller attempt")
+	require.Equal(t, 0, secondCalls, "a second eligible channel must remain unused after upstream acceptance")
 	require.Eventually(t, func() bool {
 		var user model.User
 		if db.First(&user, 43).Error != nil {
@@ -269,4 +303,45 @@ func TestImage2ControllerRelayDoesNotReplayAcceptedUpstreamResponse(t *testing.T
 		}
 		return user.Quota == 1000000
 	}, time.Second, 10*time.Millisecond, "failed accepted request must refund its precharge once")
+
+	secondRecorder := httptest.NewRecorder()
+	secondContext, _ := gin.CreateTestContext(secondRecorder)
+	secondContext.Request = httptest.NewRequest(http.MethodPost, "/pg/images/generations", strings.NewReader(`{"model":"gpt-image-2","prompt":"written fake controller image","size":"1024x1024"}`))
+	secondContext.Request.Header.Set("Content-Type", "application/json")
+	secondContext.Request.Header.Set("X-Request-ID", requestID2)
+	secondContext.Set(common.RequestIdKey, requestID2)
+	secondContext.Set(string(constant.ContextKeyUserId), 43)
+	secondContext.Set(string(constant.ContextKeyUserQuota), 1000000)
+	secondContext.Set(string(constant.ContextKeyUserGroup), "default")
+	secondContext.Set(string(constant.ContextKeyUsingGroup), "default")
+	secondContext.Set(string(constant.ContextKeyUserSetting), dto.UserSetting{BillingPreference: "wallet_only", AcceptUnsetRatioModel: true})
+	secondContext.Set(string(constant.ContextKeyOriginalModel), "gpt-image-2")
+	secondContext.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeOpenAI)
+	secondContext.Set(string(constant.ContextKeyChannelBaseUrl), server.URL)
+	secondContext.Set(string(constant.ContextKeyChannelKey), "fake-upstream-key")
+	secondContext.Set(string(constant.ContextKeyChannelId), 93)
+	secondContext.Set(string(constant.ContextKeyChannelName), "image2-controller-replay-fake")
+	secondContext.Set(string(constant.ContextKeyChannelSetting), dto.ChannelSettings{})
+	secondContext.Set(string(constant.ContextKeyChannelOtherSetting), dto.ChannelOtherSettings{})
+	secondContext.Set(string(constant.ContextKeyChannelParamOverride), map[string]interface{}{})
+	secondContext.Set(string(constant.ContextKeyChannelHeaderOverride), map[string]interface{}{"X-Request-ID": requestID2})
+	secondContext.Set(string(constant.ContextKeyChannelIsMultiKey), false)
+	secondContext.Set(string(constant.ContextKeyChannelAutoBan), false)
+	secondContext.Set(string(constant.ContextKeyChannelStatusCodeMapping), "")
+	secondContext.Set(string(constant.ContextKeyTokenUnlimited), true)
+	secondContext.Set(string(constant.ContextKeyTokenKey), "playground-token")
+	secondContext.Set(string(constant.ContextKeyTokenGroup), "default")
+	secondContext.Set(string(constant.ContextKeyRequestStartTime), time.Now())
+	_, _ = secondRecorder.WriteString("already-written")
+
+	controller.Relay(secondContext, types.RelayFormatOpenAIImage)
+	require.Equal(t, 2, calls, "written response case should make exactly one new upstream attempt")
+	require.Equal(t, 0, secondCalls, "written response must not fail over to the second channel")
+	require.Eventually(t, func() bool {
+		var user model.User
+		if db.First(&user, 43).Error != nil {
+			return false
+		}
+		return user.Quota == 1000000
+	}, time.Second, 10*time.Millisecond, "written response failure must refund its precharge once")
 }
