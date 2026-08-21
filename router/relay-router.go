@@ -68,6 +68,17 @@ func SetRelayRouter(router *gin.Engine) {
 		playgroundRouter.POST("/images/generations", controller.Playground)
 		playgroundRouter.POST("/images/edits", controller.Playground)
 	}
+	// Image2 asynchronous delivery has a separate submit/poll surface. The
+	// submit path selects and charges one normal Image2 request in the worker;
+	// polling is read-only and never selects a channel or calls upstream again.
+	image2JobRouter := router.Group("/pg/images/jobs")
+	image2JobRouter.Use(middleware.RouteTag("relay"))
+	image2JobRouter.Use(middleware.SystemPerformanceCheck())
+	image2JobRouter.Use(middleware.UserAuth())
+	{
+		image2JobRouter.POST("/:operation", middleware.Distribute(), controller.SubmitImage2Job)
+		image2JobRouter.GET("/:id", controller.GetImage2Job)
+	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
@@ -80,6 +91,13 @@ func SetRelayRouter(router *gin.Engine) {
 		wsRouter.GET("/realtime", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIRealtime)
 		})
+	}
+	// Public token-authenticated async Image2 generation. This is opt-in: the
+	// existing synchronous /v1/images/generations contract is unchanged.
+	image2V1JobRouter := relayV1Router.Group("/images/generations/jobs")
+	{
+		image2V1JobRouter.POST("", middleware.Distribute(), controller.SubmitImage2Job)
+		image2V1JobRouter.GET("/:id", controller.GetImage2Job)
 	}
 	{
 		//http router

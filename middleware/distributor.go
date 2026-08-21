@@ -270,11 +270,15 @@ func isPlaygroundImage2ChatRequest(path, modelName string) bool {
 }
 
 func isImageGenerationsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/images/generations") || strings.HasPrefix(path, "/pg/images/generations")
+	return strings.HasPrefix(path, "/v1/images/generations") ||
+		strings.HasPrefix(path, "/pg/images/generations") ||
+		strings.HasPrefix(path, "/pg/images/jobs/generations")
 }
 
 func isImageEditsPath(path string) bool {
-	return strings.HasPrefix(path, "/v1/images/edits") || strings.HasPrefix(path, "/pg/images/edits")
+	return strings.HasPrefix(path, "/v1/images/edits") ||
+		strings.HasPrefix(path, "/pg/images/edits") ||
+		strings.HasPrefix(path, "/pg/images/jobs/edits")
 }
 
 func getPlaygroundGroup(c *gin.Context) (string, error) {
