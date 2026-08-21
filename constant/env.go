@@ -10,6 +10,11 @@ var GetMediaToken bool
 var GetMediaTokenNotStream bool
 var UpdateTask bool
 var MaxRequestBodyMB int
+
+// MaxImage2InputMB bounds each Image2 multipart image or mask before any
+// upstream call. It is intentionally separate from the generic request-body
+// limit and provider capability profiles.
+var MaxImage2InputMB int
 var AzureDefaultAPIVersion string
 var NotifyLimitCount int
 var NotificationLimitDurationMinute int
