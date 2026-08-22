@@ -34,8 +34,11 @@ func TestEvaluateSafeFailover(t *testing.T) {
 		{
 			name: "content safety never switches",
 			input: SafeFailoverInput{
-				MaxAttempts: 1,
-				Error:       makeErr(http.StatusForbidden, types.ErrorCodePromptBlocked, "prompt blocked"),
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusForbidden, types.ErrorCodePromptBlocked, "prompt blocked"),
 			},
 			reason: "content_safety",
 		},
@@ -86,9 +89,11 @@ func TestEvaluateSafeFailover(t *testing.T) {
 		{
 			name: "accepted image task is blocked",
 			input: SafeFailoverInput{
-				MaxAttempts: 1,
-				ModelName:   "gpt-image-2",
-				Error:       makeErr(http.StatusServiceUnavailable, types.ErrorCodeBadResponseStatusCode, "job_id=abc queued"),
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusServiceUnavailable, types.ErrorCodeBadResponseStatusCode, "job_id=abc queued"),
 			},
 			reason: "upstream_accepted",
 		},
@@ -96,6 +101,9 @@ func TestEvaluateSafeFailover(t *testing.T) {
 			name: "response bytes block switch",
 			input: SafeFailoverInput{
 				MaxAttempts:           1,
+				RelayMode:             relayconstant.RelayModeImagesGenerations,
+				ModelName:             "gpt-image-2",
+				Image2SmartRouting:    true,
 				ReceivedResponseCount: 1,
 				Error:                 makeErr(http.StatusBadGateway, types.ErrorCodeBadResponseStatusCode, "stream interrupted"),
 			},
@@ -132,10 +140,68 @@ func TestEvaluateSafeFailover(t *testing.T) {
 		{
 			name: "400 does not fan out",
 			input: SafeFailoverInput{
-				MaxAttempts: 1,
-				Error:       makeErr(http.StatusBadRequest, types.ErrorCodeBadResponseStatusCode, "invalid argument"),
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusBadRequest, types.ErrorCodeBadResponseStatusCode, "invalid argument"),
 			},
 			reason: "client_or_protocol_400",
+		},
+		{
+			name: "Image2 401 channel configuration switches",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusUnauthorized, types.ErrorCodeBadResponseStatusCode, "invalid upstream api key"),
+			},
+			retry: true, reason: "image2_channel_local_error",
+		},
+		{
+			name: "Image2 403 channel permission switches",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusForbidden, types.ErrorCodeBadResponseStatusCode, "model not enabled for this channel"),
+			},
+			retry: true, reason: "image2_channel_local_error",
+		},
+		{
+			name: "Image2 404 mapping switches",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusNotFound, types.ErrorCodeBadResponseStatusCode, "model route not found"),
+			},
+			retry: true, reason: "image2_channel_local_error",
+		},
+		{
+			name: "Image2 redirect switches without following it",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusTemporaryRedirect, types.ErrorCodeBadResponseStatusCode, "upstream redirect"),
+			},
+			retry: true, reason: "image2_channel_local_error",
+		},
+		{
+			name: "Image2 channel status with acceptance evidence never switches",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				Error:              makeErr(http.StatusUnauthorized, types.ErrorCodeBadResponseStatusCode, "request accepted task_id=img_123"),
+			},
+			reason: "upstream_accepted",
 		},
 		{
 			name: "positive attempt cap blocks the next switch",

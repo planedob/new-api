@@ -429,6 +429,7 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 			MaxAttempts:           common.SafeFailoverMaxAttempts,
 			RelayMode:             info.RelayMode,
 			ModelName:             info.OriginModelName,
+			Image2SmartRouting:    c.GetBool("image2_smart_router_active"),
 			IsStream:              info.IsStream,
 			ResponseWritten:       responseWritten,
 			ReceivedResponseCount: info.ReceivedResponseCount,
