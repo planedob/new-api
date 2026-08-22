@@ -12,7 +12,7 @@ func TestNormalizeImage2RouteMode(t *testing.T) {
 		{name: "advanced", value: "advanced", want: Image2RouteModeAdvanced},
 		{name: "observe ignores case and surrounding whitespace", value: " OBSERVE ", want: Image2RouteModeObserve},
 		{name: "legacy ignores case and surrounding whitespace", value: " LEGACY ", want: Image2RouteModeLegacy},
-		{name: "unknown stays strict", value: "minimal", want: Image2RouteModeAdvanced},
+		{name: "unknown fails closed to legacy", value: "minimal", want: Image2RouteModeLegacy},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := normalizeImage2RouteMode(test.value); got != test.want {

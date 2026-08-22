@@ -72,12 +72,26 @@ func TestImage2ObserveRouteModeDoesNotEnableEnforcement(t *testing.T) {
 	require.True(t, Image2SmartRoutingObserveEnabled())
 }
 
-func TestImage2UnknownRouteModeRemainsAdvanced(t *testing.T) {
+func TestImage2UnknownRouteModeFailsClosedToLegacy(t *testing.T) {
 	oldMode := common.Image2RouteMode
 	common.Image2RouteMode = "not-a-mode"
 	t.Cleanup(func() { common.Image2RouteMode = oldMode })
 
-	require.Equal(t, common.Image2RouteModeAdvanced, Image2RouteMode())
+	require.Equal(t, common.Image2RouteModeLegacy, Image2RouteMode())
+}
+
+func TestImage2UnknownRouteModeCannotEnableSmartRouting(t *testing.T) {
+	oldEnabled := common.Image2SmartRoutingEnabled
+	oldMode := common.Image2RouteMode
+	common.SetImage2SmartRoutingEnabled(true)
+	common.Image2RouteMode = "not-a-mode"
+	t.Cleanup(func() {
+		common.SetImage2SmartRoutingEnabled(oldEnabled)
+		common.Image2RouteMode = oldMode
+	})
+
+	require.False(t, Image2SmartRoutingEnabled())
+	require.False(t, Image2SmartRoutingObserveEnabled())
 }
 
 func TestImage2SmartRouterSpecificChannelKeepsPinnedLegacyPath(t *testing.T) {

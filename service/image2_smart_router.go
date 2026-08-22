@@ -43,10 +43,12 @@ type Image2SmartRouter struct {
 
 func Image2RouteMode() string {
 	switch common.Image2RouteMode {
-	case common.Image2RouteModeLegacy, common.Image2RouteModeObserve:
+	case common.Image2RouteModeLegacy, common.Image2RouteModeObserve, common.Image2RouteModeAdvanced:
 		return common.Image2RouteMode
 	default:
-		return common.Image2RouteModeAdvanced
+		// Runtime mutations and malformed persisted values must not activate
+		// enforcement. Return the established selector path instead.
+		return common.Image2RouteModeLegacy
 	}
 }
 

@@ -144,6 +144,8 @@ func InitEnv() {
 
 func normalizeImage2RouteMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return Image2RouteModeAdvanced
 	case Image2RouteModeLegacy:
 		return Image2RouteModeLegacy
 	case Image2RouteModeObserve:
@@ -152,8 +154,8 @@ func normalizeImage2RouteMode(value string) string {
 		return Image2RouteModeAdvanced
 	default:
 		// An invalid environment value must not silently activate a looser
-		// routing policy. Preserve the existing capability-strict behaviour.
-		return Image2RouteModeAdvanced
+		// routing policy. Fall back to the established selector path.
+		return Image2RouteModeLegacy
 	}
 }
 
