@@ -146,9 +146,38 @@ var SafeFailoverMaxAttempts = 0
 // Reaching this bound blocks failover; it never triggers a retry.
 var SafeFailoverImageGuardSeconds = 60
 
-// Image2SmartRoutingEnabled gates capability-driven routing for gpt-image-2.
+// Image2SmartRoutingOptionKey is the only persisted control-plane key for the
+// Image2 capability router. It intentionally does not share channel health or
+// capability metadata settings.
+const Image2SmartRoutingOptionKey = "image2.smart_routing.enabled"
+
+// Image2SmartRoutingEnvEnabled is the environment fallback captured at
+// startup. A persisted admin option may override it, but an absent database
+// option always retains this safe environment default.
+var Image2SmartRoutingEnvEnabled = false
+
+// Image2SmartRoutingEnabled is the effective runtime gate for gpt-image-2.
 // It defaults off so a deployment preserves the established channel selector.
 var Image2SmartRoutingEnabled = false
+
+var image2SmartRoutingMutex sync.RWMutex
+
+// GetImage2SmartRoutingEnabled returns the effective gate without racing an
+// administrator's immediate runtime update.
+func GetImage2SmartRoutingEnabled() bool {
+	image2SmartRoutingMutex.RLock()
+	defer image2SmartRoutingMutex.RUnlock()
+	return Image2SmartRoutingEnabled
+}
+
+// SetImage2SmartRoutingEnabled applies a persisted control-plane value to the
+// request path immediately. Callers must use this instead of assigning the
+// runtime value during normal application operation.
+func SetImage2SmartRoutingEnabled(enabled bool) {
+	image2SmartRoutingMutex.Lock()
+	Image2SmartRoutingEnabled = enabled
+	image2SmartRoutingMutex.Unlock()
+}
 
 // Image2RouteMode is a second, explicit Image2 rollback control. It does not
 // enable smart routing on its own: IMAGE2_SMART_ROUTING_ENABLED must still be

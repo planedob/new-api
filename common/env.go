@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 func GetEnvOrDefault(env string, defaultValue int) int {
@@ -35,4 +36,23 @@ func GetEnvOrDefaultBool(env string, defaultValue bool) bool {
 		return defaultValue
 	}
 	return b
+}
+
+// ParseImage2SmartRoutingSetting accepts only boolean configuration values.
+// The caller must treat an error as disabled so malformed persisted data can
+// never activate the router.
+func ParseImage2SmartRoutingSetting(value string) (bool, error) {
+	return strconv.ParseBool(strings.TrimSpace(value))
+}
+
+// ResolveImage2SmartRoutingEnabled applies the configuration precedence used
+// by the runtime: an explicit database option overrides the environment
+// fallback; an absent option preserves the environment value; an invalid
+// database value fails closed.
+func ResolveImage2SmartRoutingEnabled(envEnabled bool, dbValue string, dbPresent bool) bool {
+	if !dbPresent {
+		return envEnabled
+	}
+	enabled, err := ParseImage2SmartRoutingSetting(dbValue)
+	return err == nil && enabled
 }

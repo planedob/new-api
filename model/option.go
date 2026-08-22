@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -177,6 +178,7 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+	common.OptionMap[common.Image2SmartRoutingOptionKey] = strconv.FormatBool(common.Image2SmartRoutingEnvEnabled)
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
@@ -189,13 +191,26 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	// Reset to the environment fallback before replaying persisted options so
+	// deleting the database row cannot leave stale routing state in memory.
+	common.SetImage2SmartRoutingEnabled(common.Image2SmartRoutingEnvEnabled)
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[common.Image2SmartRoutingOptionKey] = strconv.FormatBool(common.Image2SmartRoutingEnvEnabled)
+	common.OptionMapRWMutex.Unlock()
 	options, _ := AllOption()
+	dbValue := ""
+	dbPresent := false
 	for _, option := range options {
+		if option.Key == common.Image2SmartRoutingOptionKey {
+			dbValue = option.Value
+			dbPresent = true
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
+	common.SetImage2SmartRoutingEnabled(common.ResolveImage2SmartRoutingEnabled(common.Image2SmartRoutingEnvEnabled, dbValue, dbPresent))
 }
 
 func SyncOptions(frequency int) {
@@ -206,18 +221,34 @@ func SyncOptions(frequency int) {
 	}
 }
 
+func validateOptionValue(key string, value string) error {
+	if key == common.Image2SmartRoutingOptionKey {
+		if _, err := common.ParseImage2SmartRoutingSetting(value); err != nil {
+			return fmt.Errorf("%s must be a boolean", key)
+		}
+	}
+	return nil
+}
+
 func UpdateOption(key string, value string) error {
+	if err := validateOptionValue(key, value); err != nil {
+		return err
+	}
 	// Save to database first
 	option := Option{
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -226,6 +257,15 @@ func updateOptionMap(key string, value string) (err error) {
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
+	if key == common.Image2SmartRoutingOptionKey {
+		enabled, parseErr := common.ParseImage2SmartRoutingSetting(value)
+		if parseErr != nil {
+			// Invalid persisted state must never enable the route.
+			enabled = false
+		}
+		common.SetImage2SmartRoutingEnabled(enabled)
+		return parseErr
+	}
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
 	if handleConfigUpdate(key, value) {

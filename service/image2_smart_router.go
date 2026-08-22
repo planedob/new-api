@@ -55,14 +55,14 @@ func Image2RouteMode() string {
 // selector rollback; observe evaluates declarations without changing the
 // established selector.
 func Image2SmartRoutingEnabled() bool {
-	return common.Image2SmartRoutingEnabled && Image2RouteMode() == common.Image2RouteModeAdvanced
+	return common.GetImage2SmartRoutingEnabled() && Image2RouteMode() == common.Image2RouteModeAdvanced
 }
 
 // Image2SmartRoutingObserveEnabled evaluates the same capability contract as
 // advanced mode but leaves the established selector in charge. This gives an
 // operator a no-routing-change migration phase for capability declarations.
 func Image2SmartRoutingObserveEnabled() bool {
-	return common.Image2SmartRoutingEnabled && Image2RouteMode() == common.Image2RouteModeObserve
+	return common.GetImage2SmartRoutingEnabled() && Image2RouteMode() == common.Image2RouteModeObserve
 }
 
 func IsImage2SmartRoute(info *relaycommon.RelayInfo) bool {
