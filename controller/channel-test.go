@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -92,6 +96,7 @@ func channelTestEndpointCandidates(channel *model.Channel, modelName string) []c
 	// explicit endpoint override for a second capability probe.
 	priority := []constant.EndpointType{
 		constant.EndpointTypeImageGeneration,
+		constant.EndpointTypeImageEdits,
 		constant.EndpointTypeEmbeddings,
 		constant.EndpointTypeJinaRerank,
 		constant.EndpointTypeOpenAIResponseCompact,
@@ -251,6 +256,8 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			relayFormat = types.RelayFormatRerank
 		case constant.EndpointTypeImageGeneration:
 			relayFormat = types.RelayFormatOpenAIImage
+		case constant.EndpointTypeImageEdits:
+			relayFormat = types.RelayFormatOpenAIImage
 		case constant.EndpointTypeEmbeddings:
 			relayFormat = types.RelayFormatEmbedding
 		default:
@@ -283,6 +290,23 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	if constant.EndpointType(endpointType) == constant.EndpointTypeImageEdits {
+		imageRequest, ok := request.(*dto.ImageRequest)
+		if !ok {
+			return testResult{
+				context:     c,
+				localErr:    errors.New("invalid image edit request type"),
+				newAPIError: types.NewError(errors.New("invalid image edit request type"), types.ErrorCodeConvertRequestFailed),
+			}
+		}
+		if err := prepareChannelTestImageEditRequest(c, imageRequest); err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
+			}
+		}
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -368,7 +392,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				newAPIError: types.NewError(errors.New("invalid embedding request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
-	case relayconstant.RelayModeImagesGenerations:
+	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
 		// 图像生成请求 - request 已经是正确的类型
 		if imageReq, ok := request.(*dto.ImageRequest); ok {
 			convertedRequest, err = adaptor.ConvertImageRequest(c, info, *imageReq)
@@ -440,44 +464,49 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
 	}
-	jsonData, err := common.Marshal(convertedRequest)
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
-		}
-	}
-
-	//jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings)
-	//if err != nil {
-	//	return testResult{
-	//		context:     c,
-	//		localErr:    err,
-	//		newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
-	//	}
-	//}
-
-	if len(info.ParamOverride) > 0 {
-		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-		if err != nil {
-			if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
-				return testResult{
-					context:     c,
-					localErr:    fixedErr,
-					newAPIError: relaycommon.NewAPIErrorFromParamOverride(fixedErr),
-				}
-			}
+	var requestBody io.Reader
+	if multipartBody, ok := convertedRequest.(*bytes.Buffer); ok {
+		if len(info.ParamOverride) > 0 {
+			err := errors.New("parameter override is unsupported for multipart image edit channel tests")
 			return testResult{
 				context:     c,
 				localErr:    err,
 				newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
 			}
 		}
+		requestBytes := append([]byte(nil), multipartBody.Bytes()...)
+		requestBody = bytes.NewReader(requestBytes)
+		c.Request.Body = io.NopCloser(bytes.NewReader(requestBytes))
+	} else {
+		jsonData, marshalErr := common.Marshal(convertedRequest)
+		if marshalErr != nil {
+			return testResult{
+				context:     c,
+				localErr:    marshalErr,
+				newAPIError: types.NewError(marshalErr, types.ErrorCodeJsonMarshalFailed),
+			}
+		}
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+			if err != nil {
+				if fixedErr, ok := relaycommon.AsParamOverrideReturnError(err); ok {
+					return testResult{
+						context:     c,
+						localErr:    fixedErr,
+						newAPIError: relaycommon.NewAPIErrorFromParamOverride(fixedErr),
+					}
+				}
+				return testResult{
+					context:     c,
+					localErr:    err,
+					newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
+				}
+			}
+		}
+		requestBody = bytes.NewReader(jsonData)
+		c.Request.Body = io.NopCloser(bytes.NewReader(jsonData))
 	}
 
-	requestBody := bytes.NewBuffer(jsonData)
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -742,6 +771,76 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
+func channelTestReferencePNG() ([]byte, error) {
+	const referenceImageSize = 256
+	img := image.NewRGBA(image.Rect(0, 0, referenceImageSize, referenceImageSize))
+	for y := 0; y < referenceImageSize; y++ {
+		for x := 0; x < referenceImageSize; x++ {
+			if (x+y)%2 == 0 {
+				img.SetRGBA(x, y, color.RGBA{R: 40, G: 120, B: 220, A: 255})
+			} else {
+				img.SetRGBA(x, y, color.RGBA{R: 240, G: 180, B: 60, A: 255})
+			}
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		return nil, fmt.Errorf("encode channel test reference image: %w", err)
+	}
+	return encoded.Bytes(), nil
+}
+
+func prepareChannelTestImageEditRequest(c *gin.Context, request *dto.ImageRequest) error {
+	if c == nil || c.Request == nil || request == nil {
+		return errors.New("image edit channel test request is unavailable")
+	}
+	referenceImage, err := channelTestReferencePNG()
+	if err != nil {
+		return err
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fields := []struct {
+		key   string
+		value string
+	}{
+		{key: "model", value: request.Model},
+		{key: "prompt", value: request.Prompt},
+		{key: "size", value: request.Size},
+	}
+	for _, field := range fields {
+		key, value := field.key, field.value
+		if err := writer.WriteField(key, value); err != nil {
+			return fmt.Errorf("write image edit field %s: %w", key, err)
+		}
+	}
+	if request.N != nil {
+		if err := writer.WriteField("n", strconv.FormatUint(uint64(*request.N), 10)); err != nil {
+			return fmt.Errorf("write image edit field n: %w", err)
+		}
+	}
+	if request.Quality != "" {
+		if err := writer.WriteField("quality", request.Quality); err != nil {
+			return fmt.Errorf("write image edit field quality: %w", err)
+		}
+	}
+	part, err := writer.CreateFormFile("image", "aibuff-channel-test-reference.png")
+	if err != nil {
+		return fmt.Errorf("create image edit reference part: %w", err)
+	}
+	if _, err := part.Write(referenceImage); err != nil {
+		return fmt.Errorf("write image edit reference part: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close image edit multipart body: %w", err)
+	}
+	bodyBytes := append([]byte(nil), body.Bytes()...)
+	c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	c.Request.ContentLength = int64(len(bodyBytes))
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	return nil
+}
+
 func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
 
@@ -759,6 +858,13 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			return &dto.ImageRequest{
 				Model:  model,
 				Prompt: "a cute cat",
+				N:      lo.ToPtr(uint(1)),
+				Size:   "1024x1024",
+			}
+		case constant.EndpointTypeImageEdits:
+			return &dto.ImageRequest{
+				Model:  model,
+				Prompt: "change the background color while preserving the subject",
 				N:      lo.ToPtr(uint(1)),
 				Size:   "1024x1024",
 			}
