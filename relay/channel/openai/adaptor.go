@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -475,7 +476,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 
 		if mf != nil && mf.File != nil {
-			// Check if "image" field exists in any form, including array notation
+			image2Validation := strings.EqualFold(strings.TrimSpace(request.Model), "gpt-image-2") ||
+				(info != nil && strings.EqualFold(strings.TrimSpace(info.OriginModelName), "gpt-image-2"))
+				// Check if "image" field exists in any form, including array notation
 			var imageFiles []*multipart.FileHeader
 			var exists bool
 
@@ -512,11 +515,15 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 					fieldName = "image[]"
 				}
 
-				// Derive MIME from the bytes rather than trusting the filename.
-				mimeType, err := detectImageMimeTypeFromFile(file)
-				if err != nil {
-					_ = file.Close()
-					return nil, fmt.Errorf("detect image MIME type for file %d: %w", i, err)
+				mimeType := detectImageMimeType(fileHeader.Filename)
+				if image2Validation {
+					// Image2 derives MIME from the bytes rather than trusting the
+					// client supplied filename.
+					mimeType, err = detectImageMimeTypeFromFile(file)
+					if err != nil {
+						_ = file.Close()
+						return nil, fmt.Errorf("detect image MIME type for file %d: %w", i, err)
+					}
 				}
 
 				// Create a form file with the appropriate content type
@@ -545,11 +552,14 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				}
 				// 复制完立即关闭，避免在循环内使用 defer 占用资源
 
-				// Derive MIME from the mask bytes rather than trusting the filename.
-				mimeType, err := detectImageMimeTypeFromFile(maskFile)
-				if err != nil {
-					_ = maskFile.Close()
-					return nil, fmt.Errorf("detect mask MIME type: %w", err)
+				mimeType := detectImageMimeType(maskFiles[0].Filename)
+				if image2Validation {
+					// Image2 also validates mask bytes before forwarding them.
+					mimeType, err = detectImageMimeTypeFromFile(maskFile)
+					if err != nil {
+						_ = maskFile.Close()
+						return nil, fmt.Errorf("detect mask MIME type: %w", err)
+					}
 				}
 
 				// Create a form file with the appropriate content type
@@ -607,6 +617,25 @@ func detectImageMimeTypeFromFile(file multipart.File) (string, error) {
 		return mimeType, nil
 	default:
 		return "", fmt.Errorf("unsupported image content type %s", mimeType)
+	}
+}
+
+// detectImageMimeType preserves the established filename-based behavior for
+// non-Image2 providers. Image2 callers use detectImageMimeTypeFromFile above.
+func detectImageMimeType(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	default:
+		if strings.HasPrefix(ext, ".jp") {
+			return "image/jpeg"
+		}
+		return "image/png"
 	}
 }
 

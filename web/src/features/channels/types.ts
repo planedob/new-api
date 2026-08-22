@@ -88,6 +88,17 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  image2_capability?: Image2ChannelCapability
+}
+
+export interface Image2ChannelCapability {
+  enabled?: boolean
+  operations?: string[]
+  resolutions?: string[]
+  qualities?: string[]
+  max_n?: number
+  route_priority?: number
+  edits_accepted?: boolean
 }
 
 export interface ChannelOtherSettings {

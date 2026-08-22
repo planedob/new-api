@@ -33,19 +33,19 @@ func TestGetRandomSatisfiedChannelWithPolicyStopsAtExhaustion(t *testing.T) {
 		channelSyncLock.Unlock()
 	})
 
-	first, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 0, true)
+	first, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 0, "", true)
 	require.NoError(t, err)
 	require.Equal(t, 25, first.Id)
 
-	second, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 1, true)
+	second, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 1, "", true)
 	require.NoError(t, err)
 	require.Equal(t, 35, second.Id)
 
-	exhausted, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 2, true)
+	exhausted, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 2, "", true)
 	require.NoError(t, err)
 	require.Nil(t, exhausted)
 
-	legacy, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 2, false)
+	legacy, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-image-2", 2, "", false)
 	require.NoError(t, err)
 	require.Equal(t, 35, legacy.Id)
 }
@@ -75,11 +75,11 @@ func TestGetRandomSatisfiedChannelWithPolicyStopsAfterSingleCachedChannel(t *tes
 		channelSyncLock.Unlock()
 	})
 
-	first, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-single", 0, true)
+	first, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-single", 0, "", true)
 	require.NoError(t, err)
 	require.Equal(t, 25, first.Id)
 
-	exhausted, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-single", 1, true)
+	exhausted, err := GetRandomSatisfiedChannelWithPolicy("default", "gpt-single", 1, "", true)
 	require.NoError(t, err)
 	require.Nil(t, exhausted)
 }
@@ -113,28 +113,28 @@ func TestGetRandomSatisfiedChannelExcludingExhaustsSamePriorityBeforeFallback(t 
 	})
 
 	excluded := make(map[int]struct{})
-	first, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", excluded)
+	first, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", "", excluded)
 	require.NoError(t, err)
 	require.Contains(t, []int{25, 35}, first.Id)
 	excluded[first.Id] = struct{}{}
 
-	second, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", excluded)
+	second, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", "", excluded)
 	require.NoError(t, err)
 	require.Contains(t, []int{25, 35}, second.Id)
 	require.NotEqual(t, first.Id, second.Id)
 	excluded[second.Id] = struct{}{}
 
-	third, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", excluded)
+	third, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", "", excluded)
 	require.NoError(t, err)
 	require.Equal(t, 36, third.Id)
 	excluded[third.Id] = struct{}{}
 
-	fourth, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", excluded)
+	fourth, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", "", excluded)
 	require.NoError(t, err)
 	require.Equal(t, 40, fourth.Id)
 	excluded[fourth.Id] = struct{}{}
 
-	exhausted, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", excluded)
+	exhausted, err := GetRandomSatisfiedChannelExcluding("default", "gpt-image-2", "", excluded)
 	require.NoError(t, err)
 	require.Nil(t, exhausted)
 }

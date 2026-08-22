@@ -292,6 +292,7 @@ const SENSITIVE_FORM_FIELDS = [
   'pass_through_body_enabled',
   'system_prompt',
   'system_prompt_override',
+  'image2_capability_json',
   'allow_service_tier',
   'disable_store',
   'allow_safety_identifier',
@@ -340,6 +341,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.weight ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
+    values.image2_capability_json?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
@@ -757,6 +759,7 @@ export function ChannelMutateDrawer({
   const currentHttp2ConnectionShards = form.watch('http2_connection_shards')
   const currentSystemPrompt = form.watch('system_prompt')
   const currentSystemPromptOverride = form.watch('system_prompt_override')
+  const currentImage2Capability = form.watch('image2_capability_json')
   const currentAllowServiceTier = form.watch('allow_service_tier')
   const currentDisableStore = form.watch('disable_store')
   const currentAllowSafetyIdentifier = form.watch('allow_safety_identifier')
@@ -1025,6 +1028,7 @@ export function ChannelMutateDrawer({
     currentProxy?.trim() ||
     currentSystemPrompt?.trim() ||
     currentSystemPromptOverride ||
+    currentImage2Capability?.trim() ||
     (currentHttpProtocol && currentHttpProtocol !== 'auto') ||
     (currentHttp2ConnectionShards != null && currentHttp2ConnectionShards > 1)
   )
@@ -4367,6 +4371,34 @@ export function ChannelMutateDrawer({
                                       onCheckedChange={field.onChange}
                                     />
                                   </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
+                            <FormField
+                              control={form.control}
+                              name='image2_capability_json'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>
+                                    {t('Image2 Capability JSON')}
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Textarea
+                                      className='font-mono text-xs'
+                                      placeholder={t(
+                                        '{"enabled":true,"operations":["generations"],"resolutions":["1024"],"qualities":["standard"],"max_n":1,"route_priority":70}'
+                                      )}
+                                      rows={6}
+                                      {...field}
+                                    />
+                                  </FormControl>
+                                  <FormDescription>
+                                    {t(
+                                      'Opt in a channel for gpt-image-2 capability routing. Leave empty to keep it out of the capability router; routing never lowers requested quality or resolution.'
+                                    )}
+                                  </FormDescription>
+                                  <FormMessage />
                                 </FormItem>
                               )}
                             />

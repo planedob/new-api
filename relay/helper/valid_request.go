@@ -196,8 +196,10 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			formData := url.Values(form.Value)
 			c.Request.MultipartForm = form
 			c.Request.PostForm = formData
-			if err := validateImage2MultipartForm(form); err != nil {
-				return nil, err
+			if strings.EqualFold(strings.TrimSpace(formData.Get("model")), "gpt-image-2") {
+				if err := validateImage2MultipartForm(form); err != nil {
+					return nil, err
+				}
 			}
 			imageRequest.Prompt = formData.Get("prompt")
 			imageRequest.Model = formData.Get("model")
@@ -230,9 +232,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 				imageRequest.N = common.GetPointer(uint(1))
 			}
 
-			_, hasWatermark := values["watermark"]
+			_, hasWatermark := formData["watermark"]
 			if hasWatermark {
-				watermark := values.Get("watermark") == "true"
+				watermark := formData.Get("watermark") == "true"
 				imageRequest.Watermark = &watermark
 			}
 			break
