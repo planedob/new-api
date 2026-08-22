@@ -5,13 +5,36 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNormalizeChannelTestEndpointInfersImage2Generation(t *testing.T) {
+	channel := &model.Channel{}
+	for _, modelName := range []string{"gpt-image-2", "gpt-image-2-adobe", "image-2-1k", "dall-e-3"} {
+		t.Run(modelName, func(t *testing.T) {
+			require.Equal(t, string(constant.EndpointTypeImageGeneration), normalizeChannelTestEndpoint(channel, modelName, ""))
+		})
+	}
+}
+
+func TestNormalizeChannelTestEndpointDoesNotOverrideExplicitEndpoint(t *testing.T) {
+	channel := &model.Channel{}
+	require.Equal(t, string(constant.EndpointTypeOpenAI), normalizeChannelTestEndpoint(channel, "gpt-image-2", string(constant.EndpointTypeOpenAI)))
+}
+
+func TestIsImageGenerationChannelTestModelDoesNotBroadenToVisionModels(t *testing.T) {
+	require.True(t, isImageGenerationChannelTestModel("gpt-image-2-adobe"))
+	require.True(t, isImageGenerationChannelTestModel("image-2-1k"))
+	require.False(t, isImageGenerationChannelTestModel("gpt-4o"))
+	require.False(t, isImageGenerationChannelTestModel("gpt-4o-mini-vision"))
+}
 
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	info := &relaycommon.RelayInfo{

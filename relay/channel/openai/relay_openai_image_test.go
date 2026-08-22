@@ -9,10 +9,43 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
+
+func TestGetRequestURLPreservesImageGenerationAndEditsPaths(t *testing.T) {
+	adaptor := &Adaptor{}
+	for _, test := range []struct {
+		name string
+		path string
+		mode int
+	}{
+		{name: "generation", path: "/v1/images/generations", mode: relayconstant.RelayModeImagesGenerations},
+		{name: "edits", path: "/v1/images/edits", mode: relayconstant.RelayModeImagesEdits},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := adaptor.GetRequestURL(&relaycommon.RelayInfo{
+				RelayFormat:    types.RelayFormatOpenAIImage,
+				RelayMode:      test.mode,
+				RequestURLPath: test.path,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelBaseUrl: "https://token.secure-skill.com",
+					ChannelType:    constant.ChannelTypeOpenAI,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "https://token.secure-skill.com" + test.path
+			if got != want {
+				t.Fatalf("GetRequestURL() = %q, want %q", got, want)
+			}
+		})
+	}
+}
 
 func TestDetectImageMimeTypeFromFileUsesBytesNotFilename(t *testing.T) {
 	var body bytes.Buffer

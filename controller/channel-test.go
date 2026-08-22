@@ -48,6 +48,14 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if normalized != "" {
 		return normalized
 	}
+	// Image2 providers expose the OpenAI Images endpoints, not Chat
+	// Completions.  The channel-test UI can omit endpoint_type, so infer the
+	// image generation endpoint for the known image model families here.  This
+	// only changes the diagnostic test request; customer relay paths remain
+	// authoritative in RelayInfo.RequestURLPath.
+	if isImageGenerationChannelTestModel(modelName) {
+		return string(constant.EndpointTypeImageGeneration)
+	}
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
@@ -55,6 +63,22 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
 	return normalized
+}
+
+func isImageGenerationChannelTestModel(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	if modelName == "" {
+		return false
+	}
+	// Keep this list local to the channel diagnostic path.  The model-plaza
+	// endpoint catalogue has its own ownership and must not be changed by this
+	// upstream Image2 integration fix.
+	for _, prefix := range []string{"gpt-image-", "image-2-", "dall-e-"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return common.IsImageGenerationModel(modelName)
 }
 
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
