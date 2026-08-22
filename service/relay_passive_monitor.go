@@ -112,20 +112,17 @@ func relayPassiveElapsed(c *gin.Context) time.Duration {
 	return elapsed
 }
 
-func setImage2PassiveCapability(c *gin.Context, capability Image2RequestCapability) {
-	if c != nil {
+// SetImage2PassiveRequestCapability stores only the normalized request shape
+// for later passive dimensions. Disabled monitoring does not add request
+// context state and has no effect on the established relay path.
+func SetImage2PassiveRequestCapability(c *gin.Context, capability Image2RequestCapability) {
+	if c != nil && constant.Image2PassiveMonitorEnabled {
 		c.Set(relayPassiveImage2CapabilityContextKey, capability)
 	}
 }
 
-// SetImage2PassiveRequestCapability stores only the normalized request shape
-// for later passive dimensions. It never stores request bodies or URLs.
-func SetImage2PassiveRequestCapability(c *gin.Context, capability Image2RequestCapability) {
-	setImage2PassiveCapability(c, capability)
-}
-
 func image2PassiveCapability(c *gin.Context) (Image2RequestCapability, bool) {
-	if c == nil {
+	if c == nil || !constant.Image2PassiveMonitorEnabled {
 		return Image2RequestCapability{}, false
 	}
 	value, ok := c.Get(relayPassiveImage2CapabilityContextKey)
