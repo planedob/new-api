@@ -13,6 +13,10 @@ var (
 		"dall-e-3",
 		"dall-e-2",
 		"gpt-image-1",
+		// Image2 provider variants are image endpoints even when the
+		// upstream exposes a suffix for a resource tier (web/adobe/az, etc.).
+		"prefix:gpt-image-",
+		"prefix:image-2-",
 		"prefix:imagen-",
 		"flux-",
 		"flux.1-",

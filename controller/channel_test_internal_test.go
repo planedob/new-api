@@ -24,16 +24,34 @@ func TestNormalizeChannelTestEndpointInfersImage2Generation(t *testing.T) {
 	}
 }
 
+func TestNormalizeChannelTestEndpointReusesSharedChannelProtocol(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		channelType int
+		modelName   string
+		want        string
+	}{
+		{name: "anthropic", channelType: constant.ChannelTypeAnthropic, modelName: "claude-3-7-sonnet", want: string(constant.EndpointTypeAnthropic)},
+		{name: "gemini", channelType: constant.ChannelTypeGemini, modelName: "gemini-2.5-flash", want: string(constant.EndpointTypeGemini)},
+		{name: "image2", channelType: constant.ChannelTypeOpenAI, modelName: "gpt-image-2-wc", want: string(constant.EndpointTypeImageGeneration)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			channel := &model.Channel{Type: test.channelType}
+			require.Equal(t, test.want, normalizeChannelTestEndpoint(channel, test.modelName, ""))
+		})
+	}
+}
+
 func TestNormalizeChannelTestEndpointDoesNotOverrideExplicitEndpoint(t *testing.T) {
 	channel := &model.Channel{}
 	require.Equal(t, string(constant.EndpointTypeOpenAI), normalizeChannelTestEndpoint(channel, "gpt-image-2", string(constant.EndpointTypeOpenAI)))
 }
 
 func TestIsImageGenerationChannelTestModelDoesNotBroadenToVisionModels(t *testing.T) {
-	require.True(t, isImageGenerationChannelTestModel("gpt-image-2-adobe"))
-	require.True(t, isImageGenerationChannelTestModel("image-2-1k"))
-	require.False(t, isImageGenerationChannelTestModel("gpt-4o"))
-	require.False(t, isImageGenerationChannelTestModel("gpt-4o-mini-vision"))
+	require.True(t, common.IsImageGenerationModel("gpt-image-2-adobe"))
+	require.True(t, common.IsImageGenerationModel("image-2-1k"))
+	require.False(t, common.IsImageGenerationModel("gpt-4o"))
+	require.False(t, common.IsImageGenerationModel("gpt-4o-mini-vision"))
 }
 
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {

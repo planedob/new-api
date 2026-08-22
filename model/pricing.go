@@ -99,6 +99,13 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	if model == "" {
 		return make([]constant.EndpointType, 0)
 	}
+	// Keep the channel diagnostic path on the same model-plaza capability
+	// cache as pricing and the model list. Previously this getter could return
+	// an empty result before the first pricing refresh, forcing callers to
+	// maintain their own endpoint heuristics.
+	if DB != nil {
+		GetPricing()
+	}
 	modelSupportEndpointsLock.RLock()
 	defer modelSupportEndpointsLock.RUnlock()
 	if endpoints, ok := modelSupportEndpointTypes[model]; ok {

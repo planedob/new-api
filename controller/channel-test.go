@@ -48,37 +48,76 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if normalized != "" {
 		return normalized
 	}
-	// Image2 providers expose the OpenAI Images endpoints, not Chat
-	// Completions.  The channel-test UI can omit endpoint_type, so infer the
-	// image generation endpoint for the known image model families here.  This
-	// only changes the diagnostic test request; customer relay paths remain
-	// authoritative in RelayInfo.RequestURLPath.
-	if isImageGenerationChannelTestModel(modelName) {
-		return string(constant.EndpointTypeImageGeneration)
-	}
-	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
-		return string(constant.EndpointTypeOpenAIResponseCompact)
-	}
-	if channel != nil && channel.Type == constant.ChannelTypeCodex {
-		return string(constant.EndpointTypeOpenAIResponse)
+
+	// The one-click channel test is intentionally capability-driven. Reuse the
+	// model-plaza endpoint metadata when it is loaded, then fall back to the
+	// shared channel/model endpoint matrix. This keeps the test button aligned
+	// with the same endpoint ownership used by pricing and routing instead of
+	// maintaining a second provider-specific list here.
+	for _, endpoint := range channelTestEndpointCandidates(channel, modelName) {
+		if _, ok := common.GetDefaultEndpointInfo(endpoint); ok {
+			return string(endpoint)
+		}
 	}
 	return normalized
 }
 
-func isImageGenerationChannelTestModel(modelName string) bool {
-	modelName = strings.ToLower(strings.TrimSpace(modelName))
+func channelTestEndpointCandidates(channel *model.Channel, modelName string) []constant.EndpointType {
+	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
-		return false
+		return nil
 	}
-	// Keep this list local to the channel diagnostic path.  The model-plaza
-	// endpoint catalogue has its own ownership and must not be changed by this
-	// upstream Image2 integration fix.
-	for _, prefix := range []string{"gpt-image-", "image-2-", "dall-e-"} {
-		if strings.HasPrefix(modelName, prefix) {
-			return true
+
+	endpoints := model.GetModelSupportEndpointTypes(modelName)
+	if len(endpoints) == 0 && channel != nil {
+		endpoints = common.GetEndpointTypesByChannelType(channel.Type, modelName)
+	}
+	if len(endpoints) == 0 {
+		// Preserve the existing fallback rules for models that are not yet in
+		// the pricing cache. These are still shared endpoint rules, not a new
+		// provider map.
+		if common.IsImageGenerationModel(modelName) {
+			endpoints = []constant.EndpointType{constant.EndpointTypeImageGeneration}
+		} else if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
+			endpoints = []constant.EndpointType{constant.EndpointTypeOpenAIResponseCompact}
+		} else if channel != nil && channel.Type == constant.ChannelTypeCodex {
+			endpoints = []constant.EndpointType{constant.EndpointTypeOpenAIResponse}
 		}
 	}
-	return common.IsImageGenerationModel(modelName)
+
+	// Metadata coming from a JSON object has no stable ordering. Keep the
+	// non-destructive image probe first for image-capable models, then prefer
+	// the endpoint family native to the channel. The first supported endpoint
+	// is the protocol used by the one-click test; the dialog still allows an
+	// explicit endpoint override for a second capability probe.
+	priority := []constant.EndpointType{
+		constant.EndpointTypeImageGeneration,
+		constant.EndpointTypeEmbeddings,
+		constant.EndpointTypeJinaRerank,
+		constant.EndpointTypeOpenAIResponseCompact,
+		constant.EndpointTypeOpenAIResponse,
+		constant.EndpointTypeAnthropic,
+		constant.EndpointTypeGemini,
+		constant.EndpointTypeOpenAI,
+	}
+	set := make(map[constant.EndpointType]struct{}, len(endpoints))
+	for _, endpoint := range endpoints {
+		set[endpoint] = struct{}{}
+	}
+	ordered := make([]constant.EndpointType, 0, len(endpoints))
+	for _, endpoint := range priority {
+		if _, ok := set[endpoint]; ok {
+			ordered = append(ordered, endpoint)
+			delete(set, endpoint)
+		}
+	}
+	for _, endpoint := range endpoints {
+		if _, ok := set[endpoint]; ok {
+			ordered = append(ordered, endpoint)
+			delete(set, endpoint)
+		}
+	}
+	return ordered
 }
 
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
