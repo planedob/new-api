@@ -74,14 +74,6 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 		return SafeFailoverDecision{Retry: true, Reason: "channel_local_error"}
 	}
 
-	// Image2 channel configuration failures must not turn into a customer
-	// failure when another compatible channel remains. This is deliberately
-	// after response/acceptance/safety guards above: an accepted or written
-	// request must never be replayed, even when its status is channel-like.
-	if input.Image2SmartRouting && isImage2ChannelLocalStatus(code) {
-		return SafeFailoverDecision{Retry: true, Reason: "image2_channel_local_error"}
-	}
-
 	// An explicit upstream 5xx is a failed attempt. Continue through the
 	// remaining channel priority chain unless an earlier guard proved that the
 	// response started or the upstream accepted/charged a task.
@@ -91,6 +83,15 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 
 	if imageLike && input.ImageGuard > 0 && input.AttemptElapsed >= input.ImageGuard {
 		return SafeFailoverDecision{Reason: "image_guard_elapsed"}
+	}
+
+	// Image2 channel configuration failures must not turn into a customer
+	// failure when another compatible channel remains. Keep this after the
+	// image elapsed-time guard as well as the response/acceptance/safety guards:
+	// an accepted, written, or already-too-long image attempt must never be
+	// replayed, even when its status is channel-like.
+	if input.Image2SmartRouting && isImage2ChannelLocalStatus(code) {
+		return SafeFailoverDecision{Retry: true, Reason: "image2_channel_local_error"}
 	}
 
 	if code >= 200 && code < 300 {
