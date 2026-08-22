@@ -135,7 +135,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayErrorStage = "content_validation"
 	var image2Router *service.Image2SmartRouter
+	var image2Capability *service.Image2RequestCapability
 	if imageRequest, ok := request.(*dto.ImageRequest); ok {
+		// Keep only the normalized Image2 request dimensions for optional passive
+		// monitoring. This does not select a channel or alter the legacy path.
+		if capability, capabilityErr := service.ParseImage2RequestCapability(relayInfo, imageRequest); capabilityErr == nil {
+			image2Capability = &capability
+			service.SetImage2PassiveRequestCapability(c, capability)
+		}
 		image2Router, err = service.NewImage2SmartRouter(c, relayInfo, imageRequest)
 		if err != nil {
 			if service.Image2SmartRoutingEnabled() {
@@ -168,6 +175,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					http.StatusServiceUnavailable,
 					types.ErrOptionWithSkipRetry(),
 				)
+				if image2Capability != nil {
+					selectionGroup := relayInfo.UsingGroup
+					if selectionGroup == "" {
+						selectionGroup = relayInfo.TokenGroup
+					}
+					service.RecordRelayErrorLog(c, newAPIError, service.RelayErrorLogOptions{
+						Stage:          "channel_selection",
+						ModelName:      relayInfo.OriginModelName,
+						Group:          selectionGroup,
+						UpstreamCalled: false,
+						BillingState:   service.RelayErrorBillingNotStarted,
+						Charged:        common.GetPointer(false),
+						Image2:         image2Capability,
+						Extra: map[string]interface{}{
+							"image2_candidate_decisions": image2Router.DecisionSummary(),
+						},
+					})
+				}
 				return
 			}
 			c.Set("image2_smart_router_active", true)
@@ -298,6 +323,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.ObserveImage2Success(c, c.Writer.Status())
 			relayInfo.LastError = nil
 			return
 		}
@@ -494,6 +520,9 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	// Passive monitoring is strictly observational; it does not participate in
+	// retry decisions or channel health state.
+	service.ObserveImage2UpstreamError(c, err, channelError.ChannelId)
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {

@@ -20,6 +20,11 @@ var NotifyLimitCount int
 var NotificationLimitDurationMinute int
 var GenerateDefaultToken bool
 var ErrorLogEnabled bool
+
+// Image2PassiveMonitorEnabled gates the in-process Image2 operational monitor.
+// It is deliberately separate from searchable error-log persistence so an
+// operator can keep the monitor disabled while retaining existing error logs.
+var Image2PassiveMonitorEnabled bool
 var TaskQueryLimit int
 var TaskTimeoutMinutes int
 
