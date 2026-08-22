@@ -10,10 +10,14 @@ import (
 )
 
 type SafeFailoverInput struct {
-	RetryIndex            int
-	MaxAttempts           int
-	RelayMode             int
-	ModelName             string
+	RetryIndex  int
+	MaxAttempts int
+	RelayMode   int
+	ModelName   string
+	// Image2SmartRouting marks the exact Image2 route. It keeps the
+	// channel-local 4xx/3xx policy explicit instead of relying only on the
+	// generic status table.
+	Image2SmartRouting    bool
 	IsStream              bool
 	ResponseWritten       bool
 	ReceivedResponseCount int
@@ -70,6 +74,14 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 		return SafeFailoverDecision{Retry: true, Reason: "channel_local_error"}
 	}
 
+	// Image2 channel configuration failures must not turn into a customer
+	// failure when another compatible channel remains. This is deliberately
+	// after response/acceptance/safety guards above: an accepted or written
+	// request must never be replayed, even when its status is channel-like.
+	if input.Image2SmartRouting && isImage2ChannelLocalStatus(code) {
+		return SafeFailoverDecision{Retry: true, Reason: "image2_channel_local_error"}
+	}
+
 	// An explicit upstream 5xx is a failed attempt. Continue through the
 	// remaining channel priority chain unless an earlier guard proved that the
 	// response started or the upstream accepted/charged a task.
@@ -106,6 +118,10 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 	default:
 		return SafeFailoverDecision{Reason: "non_retryable_status"}
 	}
+}
+
+func isImage2ChannelLocalStatus(code int) bool {
+	return code == 401 || code == 403 || code == 404 || (code >= 300 && code < 400)
 }
 
 func IsImageLikeRelay(relayMode int, modelName string) bool {
