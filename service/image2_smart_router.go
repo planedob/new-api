@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -22,6 +23,7 @@ import (
 type Image2RequestCapability struct {
 	Operation  string
 	Resolution string
+	Size       string
 	Quality    string
 	N          uint
 }
@@ -39,6 +41,8 @@ type Image2SmartRouter struct {
 	candidates []*model.Channel
 	next       int
 	decisions  []Image2CandidateDecision
+	configured bool
+	priorities map[int]int
 }
 
 func Image2RouteMode() string {
@@ -85,8 +89,35 @@ func ParseImage2RequestCapability(info *relaycommon.RelayInfo, request *dto.Imag
 	n := uint(1)
 	if request.N != nil {
 		n = *request.N
+		if n == 0 || n > dto.MaxImageN {
+			return Image2RequestCapability{}, fmt.Errorf("invalid Image2 n %d; expected a value between 1 and %d", n, dto.MaxImageN)
+		}
 	}
-	return Image2RequestCapability{Operation: operation, Resolution: resolution, Quality: strings.ToLower(strings.TrimSpace(request.Quality)), N: n}, nil
+	return Image2RequestCapability{
+		Operation:  operation,
+		Resolution: resolution,
+		Size:       canonicalImage2Size(request.Size),
+		Quality:    strings.ToLower(strings.TrimSpace(request.Quality)),
+		N:          n,
+	}, nil
+}
+
+func canonicalImage2Size(size string) string {
+	size = strings.ToLower(strings.TrimSpace(size))
+	switch size {
+	case "", "auto":
+		return "auto"
+	case "1024":
+		return "1024x1024"
+	case "2048":
+		return "2048x2048"
+	case "4096":
+		return "4096x4096"
+	case "uhd":
+		return "3840x2160"
+	default:
+		return size
+	}
 }
 
 func image2Resolution(size string) (string, error) {
@@ -110,6 +141,9 @@ func image2Resolution(size string) (string, error) {
 	h, hErr := strconv.Atoi(parts[1])
 	if wErr != nil || hErr != nil || w < 1 || h < 1 {
 		return "", fmt.Errorf("invalid Image2 size %q", size)
+	}
+	if w > 4096 || h > 4096 {
+		return "", fmt.Errorf("unsupported Image2 size %q: dimensions exceed 4096", size)
 	}
 	if w <= 1024 && h <= 1024 {
 		return "1024", nil
@@ -196,28 +230,63 @@ func NewImage2SmartRouter(c *gin.Context, info *relaycommon.RelayInfo, request *
 }
 
 func newImage2SmartRouterIfConfigured(req Image2RequestCapability, channels []*model.Channel) (*Image2SmartRouter, bool) {
-	for _, channel := range channels {
-		if capability := channel.GetSetting().Image2Capability; capability != nil && capability.Enabled {
-			return newImage2SmartRouter(req, channels), true
-		}
+	router := newImage2SmartRouter(req, channels)
+	if !router.configured {
+		return nil, false
 	}
-	return nil, false
+	return router, true
 }
 
 func newImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel) *Image2SmartRouter {
-	router := &Image2SmartRouter{request: req, decisions: make([]Image2CandidateDecision, 0, len(channels))}
+	router := &Image2SmartRouter{
+		request:    req,
+		decisions:  make([]Image2CandidateDecision, 0, len(channels)),
+		priorities: make(map[int]int, len(channels)),
+	}
+	now := time.Now().UTC()
 	for _, channel := range channels {
-		capability := channel.GetSetting().Image2Capability
+		if channel == nil {
+			continue
+		}
+		setting := dto.ChannelSettings{}
+		if channel.Setting != nil && strings.TrimSpace(*channel.Setting) != "" {
+			if err := common.Unmarshal([]byte(*channel.Setting), &setting); err != nil {
+				router.configured = true
+				router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_invalid"})
+				continue
+			}
+		}
+		capability := setting.Image2Capability
+		if (capability != nil && capability.Enabled) || setting.Image2CapabilityVerification != nil {
+			router.configured = true
+		}
+		if capability == nil {
+			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_not_enabled"})
+			continue
+		}
+		if err := capability.Validate(); err != nil {
+			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_invalid"})
+			continue
+		}
+		if !capability.Enabled {
+			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_not_enabled"})
+			continue
+		}
+		if reason := setting.Image2CapabilityVerification.RoutingReason(now, capability); reason != "" {
+			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
+			continue
+		}
 		if reason := image2Incompatibility(req, capability); reason != "" {
 			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
 			continue
 		}
+		router.priorities[channel.Id] = capability.RoutePriority
 		router.candidates = append(router.candidates, channel)
 	}
 	sort.SliceStable(router.candidates, func(i, j int) bool {
-		left, right := router.candidates[i].GetSetting().Image2Capability, router.candidates[j].GetSetting().Image2Capability
-		if left.RoutePriority != right.RoutePriority {
-			return left.RoutePriority < right.RoutePriority
+		left, right := router.priorities[router.candidates[i].Id], router.priorities[router.candidates[j].Id]
+		if left != right {
+			return left < right
 		}
 		return router.candidates[i].Id < router.candidates[j].Id
 	})
@@ -231,6 +300,29 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 	if capability == nil || !capability.Enabled {
 		return "image2_capability_not_enabled"
 	}
+	if req.N == 0 || req.N > capability.MaxN {
+		return "n_exceeds_limit"
+	}
+	if len(capability.Profiles) > 0 {
+		requestQuality := strings.ToLower(strings.TrimSpace(req.Quality))
+		if requestQuality == "" || requestQuality == "auto" {
+			requestQuality = "default"
+		}
+		for _, profile := range capability.Profiles {
+			if !strings.EqualFold(strings.TrimSpace(profile.Operation), req.Operation) ||
+				!strings.EqualFold(strings.TrimSpace(profile.Resolution), req.Resolution) ||
+				!strings.EqualFold(strings.TrimSpace(profile.Quality), requestQuality) {
+				continue
+			}
+			if canonicalImage2Size(profile.Size) != canonicalImage2Size(req.Size) {
+				continue
+			}
+			if profile.MaxN >= req.N {
+				return ""
+			}
+		}
+		return "capability_profile_unverified"
+	}
 	if !containsFold(capability.Operations, req.Operation) {
 		return "operation_unsupported"
 	}
@@ -240,13 +332,19 @@ func image2Incompatibility(req Image2RequestCapability, capability *dto.Image2Ch
 	if !containsFold(capability.Resolutions, req.Resolution) {
 		return "resolution_unsupported"
 	}
-	// An omitted quality means "use the provider default". Only reject a
-	// channel when the client explicitly requests a quality it cannot serve.
-	if req.Quality != "" && len(capability.Qualities) > 0 && !containsFold(capability.Qualities, req.Quality) {
-		return "quality_unsupported"
+	if req.Resolution == "uhd" && req.Size != "" && canonicalImage2Size(req.Size) != "auto" && canonicalImage2Size(req.Size) != canonicalImage2Size("uhd") {
+		return "size_unsupported"
 	}
-	if capability.MaxN > 0 && req.N > capability.MaxN {
-		return "n_exceeds_limit"
+	// Omitted/auto quality means "use the provider default". Every explicit
+	// quality must be declared; an empty list is not a wildcard.
+	quality := strings.ToLower(strings.TrimSpace(req.Quality))
+	if quality != "" && quality != "auto" {
+		if len(capability.Qualities) == 0 {
+			return "quality_unverified"
+		}
+		if !containsFold(capability.Qualities, quality) {
+			return "quality_unsupported"
+		}
 	}
 	return ""
 }

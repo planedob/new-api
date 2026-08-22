@@ -76,9 +76,23 @@ func TestImage2ControllerNoCandidateFailsBeforeUpstreamAndBilling(t *testing.T) 
 		BaseURL: &baseURL, Group: "default", Models: "gpt-image-2",
 		Priority: &priority, AutoBan: &autoBan,
 	}
-	channel.SetSetting(dto.ChannelSettings{Image2Capability: &dto.Image2ChannelCapability{
-		Enabled: true, Operations: []string{"generations"}, Resolutions: []string{"uhd"}, RoutePriority: 10,
-	}})
+	capability := &dto.Image2ChannelCapability{
+		Enabled: true, Operations: []string{"generations"}, Resolutions: []string{"uhd"}, MaxN: 1, RoutePriority: 10,
+	}
+	capabilityDigest, err := dto.Image2CapabilitySHA256(capability)
+	require.NoError(t, err)
+	verificationNow := time.Now().UTC().Truncate(time.Second)
+	channel.SetSetting(dto.ChannelSettings{
+		Image2Capability: capability,
+		Image2CapabilityVerification: &dto.Image2CapabilityVerification{
+			Status:           "passed",
+			Source:           "fixed_channel_test",
+			VerifiedAt:       verificationNow.Add(-time.Hour).Format(time.RFC3339),
+			ValidUntil:       verificationNow.Add(time.Hour).Format(time.RFC3339),
+			CapabilitySHA256: capabilityDigest,
+			EvidenceSHA256:   []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+		},
+	})
 	require.NoError(t, db.Create(channel).Error)
 	require.NoError(t, db.Create(&model.Ability{
 		Group: "default", Model: "gpt-image-2", ChannelId: channel.Id, Enabled: true, Priority: &priority,

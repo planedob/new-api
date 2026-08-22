@@ -1,8 +1,12 @@
 package dto
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ChannelSettings struct {
@@ -16,7 +20,14 @@ type ChannelSettings struct {
 	// router. It deliberately describes capabilities instead of channel IDs so
 	// operators can change upstreams without a code deployment.
 	Image2Capability *Image2ChannelCapability `json:"image2_capability,omitempty"`
+	// Image2CapabilityVerification binds the declaration to current,
+	// fixed-channel test evidence. A declaration without valid evidence cannot
+	// become a smart-routing candidate.
+	Image2CapabilityVerification *Image2CapabilityVerification `json:"image2_capability_verification,omitempty"`
 }
+
+// MaxImageN keeps both request validation and channel declarations bounded.
+const MaxImageN = 128
 
 // Image2ChannelCapability declares the Image2 request shapes an upstream can
 // safely accept. RoutePriority is only compared among compatible candidates;
@@ -29,6 +40,119 @@ type Image2ChannelCapability struct {
 	MaxN          uint     `json:"max_n,omitempty"` // zero means no declared limit
 	RoutePriority int      `json:"route_priority,omitempty"`
 	EditsAccepted bool     `json:"edits_accepted,omitempty"`
+	// Profiles optionally bind an exact operation/size/quality combination.
+	// When present, the router does not invent a cross-product from the coarse
+	// declaration above.
+	Profiles []Image2CapabilityProfile `json:"profiles,omitempty"`
+}
+
+type Image2CapabilityProfile struct {
+	Operation  string `json:"operation"`
+	Resolution string `json:"resolution"`
+	Size       string `json:"size"`
+	Quality    string `json:"quality"`
+	MaxN       uint   `json:"max_n"`
+}
+
+type Image2CapabilityVerification struct {
+	Status           string   `json:"status"`
+	Source           string   `json:"source"`
+	VerifiedAt       string   `json:"verified_at"`
+	ValidUntil       string   `json:"valid_until"`
+	CapabilitySHA256 string   `json:"capability_sha256"`
+	EvidenceSHA256   []string `json:"evidence_sha256"`
+}
+
+func (verification *Image2CapabilityVerification) Validate() error {
+	if verification == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(verification.Status)) {
+	case "passed", "failed", "conflict", "stale":
+	default:
+		return fmt.Errorf("image2_capability_verification.status is invalid")
+	}
+	if strings.ToLower(strings.TrimSpace(verification.Source)) != "fixed_channel_test" {
+		return fmt.Errorf("image2_capability_verification.source must be fixed_channel_test")
+	}
+	verifiedAt, err := time.Parse(time.RFC3339, verification.VerifiedAt)
+	if err != nil {
+		return fmt.Errorf("image2_capability_verification.verified_at must be RFC3339")
+	}
+	validUntil, err := time.Parse(time.RFC3339, verification.ValidUntil)
+	if err != nil {
+		return fmt.Errorf("image2_capability_verification.valid_until must be RFC3339")
+	}
+	if !validUntil.After(verifiedAt) {
+		return fmt.Errorf("image2_capability_verification.valid_until must be after verified_at")
+	}
+	if !validSHA256(verification.CapabilitySHA256) {
+		return fmt.Errorf("image2_capability_verification.capability_sha256 is invalid")
+	}
+	if len(verification.EvidenceSHA256) == 0 {
+		return fmt.Errorf("image2_capability_verification.evidence_sha256 is required")
+	}
+	seen := make(map[string]struct{}, len(verification.EvidenceSHA256))
+	for _, digest := range verification.EvidenceSHA256 {
+		digest = strings.TrimSpace(digest)
+		if !validSHA256(digest) {
+			return fmt.Errorf("image2_capability_verification.evidence_sha256 contains an invalid digest")
+		}
+		if _, duplicate := seen[digest]; duplicate {
+			return fmt.Errorf("image2_capability_verification.evidence_sha256 contains a duplicate digest")
+		}
+		seen[digest] = struct{}{}
+	}
+	return nil
+}
+
+func validSHA256(digest string) bool {
+	digest = strings.TrimSpace(digest)
+	decoded, err := hex.DecodeString(digest)
+	return err == nil && len(decoded) == sha256.Size && digest == strings.ToLower(digest)
+}
+
+func Image2CapabilitySHA256(capability *Image2ChannelCapability) (string, error) {
+	encoded, err := json.Marshal(capability)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+// RoutingReason is empty only when current passed evidence is bound to the
+// exact capability declaration.
+func (verification *Image2CapabilityVerification) RoutingReason(now time.Time, capability *Image2ChannelCapability) string {
+	if verification == nil {
+		return "image2_verification_missing"
+	}
+	if capability == nil {
+		return "image2_capability_missing"
+	}
+	if err := capability.Validate(); err != nil {
+		return "image2_capability_invalid"
+	}
+	if err := verification.Validate(); err != nil {
+		return "image2_verification_invalid"
+	}
+	status := strings.ToLower(strings.TrimSpace(verification.Status))
+	if status != "passed" {
+		return "image2_verification_" + status
+	}
+	verifiedAt, _ := time.Parse(time.RFC3339, verification.VerifiedAt)
+	if now.Before(verifiedAt) {
+		return "image2_verification_not_yet_valid"
+	}
+	validUntil, _ := time.Parse(time.RFC3339, verification.ValidUntil)
+	if !now.Before(validUntil) {
+		return "image2_verification_expired"
+	}
+	capabilityDigest, err := Image2CapabilitySHA256(capability)
+	if err != nil || capabilityDigest != strings.TrimSpace(verification.CapabilitySHA256) {
+		return "image2_verification_capability_mismatch"
+	}
+	return ""
 }
 
 func (capability *Image2ChannelCapability) Validate() error {
@@ -44,6 +168,9 @@ func (capability *Image2ChannelCapability) Validate() error {
 	if len(capability.Resolutions) == 0 {
 		return fmt.Errorf("image2_capability.resolutions is required when enabled")
 	}
+	if capability.MaxN < 1 || capability.MaxN > MaxImageN {
+		return fmt.Errorf("image2_capability.max_n must be between 1 and %d when enabled", MaxImageN)
+	}
 	if err := validateImage2CapabilityValues("operations", capability.Operations, map[string]struct{}{
 		"generations": {},
 		"edits":       {},
@@ -57,12 +184,92 @@ func (capability *Image2ChannelCapability) Validate() error {
 	}); err != nil {
 		return err
 	}
+	hasEdits := containsImage2CapabilityValue(capability.Operations, "edits")
+	if hasEdits != capability.EditsAccepted {
+		return fmt.Errorf("image2_capability.edits_accepted must be %t when operations includes edits", hasEdits)
+	}
 	for _, quality := range capability.Qualities {
-		if strings.TrimSpace(quality) == "" {
+		normalized := strings.ToLower(strings.TrimSpace(quality))
+		if normalized == "" {
 			return fmt.Errorf("image2_capability.qualities cannot contain an empty value")
 		}
+		if normalized == "auto" {
+			return fmt.Errorf("image2_capability.qualities cannot contain auto; omit qualities to use the provider default")
+		}
+	}
+	if err := validateImage2CapabilityValues("qualities", capability.Qualities, map[string]struct{}{
+		"standard": {},
+		"high":     {},
+	}); err != nil {
+		return err
+	}
+	seenProfiles := make(map[string]struct{}, len(capability.Profiles))
+	for index, profile := range capability.Profiles {
+		operation := strings.ToLower(strings.TrimSpace(profile.Operation))
+		if !containsImage2CapabilityValue(capability.Operations, operation) {
+			return fmt.Errorf("image2_capability.profiles[%d].operation is not declared", index)
+		}
+		resolution := strings.ToLower(strings.TrimSpace(profile.Resolution))
+		if !containsImage2CapabilityValue(capability.Resolutions, resolution) {
+			return fmt.Errorf("image2_capability.profiles[%d].resolution is not declared", index)
+		}
+		if operation == "edits" && !capability.EditsAccepted {
+			return fmt.Errorf("image2_capability.profiles[%d].edits_accepted must be true", index)
+		}
+		if profile.Size != normalizeImage2CapabilitySize(profile.Size) {
+			return fmt.Errorf("image2_capability.profiles[%d].size is invalid", index)
+		}
+		if image2CapabilityProfileResolution(profile.Size) != resolution {
+			return fmt.Errorf("image2_capability.profiles[%d].size does not match resolution", index)
+		}
+		quality := strings.ToLower(strings.TrimSpace(profile.Quality))
+		if quality != "default" && quality != "standard" && quality != "high" {
+			return fmt.Errorf("image2_capability.profiles[%d].quality is unsupported", index)
+		}
+		if quality != "default" && !containsImage2CapabilityValue(capability.Qualities, quality) {
+			return fmt.Errorf("image2_capability.profiles[%d].quality is not declared", index)
+		}
+		if profile.MaxN < 1 || profile.MaxN > capability.MaxN || profile.MaxN > MaxImageN {
+			return fmt.Errorf("image2_capability.profiles[%d].max_n must be between 1 and max_n", index)
+		}
+		key := fmt.Sprintf("%s/%s/%s/%s/%d", operation, resolution, profile.Size, quality, profile.MaxN)
+		if _, duplicate := seenProfiles[key]; duplicate {
+			return fmt.Errorf("image2_capability.profiles contains duplicate %s", key)
+		}
+		seenProfiles[key] = struct{}{}
 	}
 	return nil
+}
+
+func containsImage2CapabilityValue(values []string, value string) bool {
+	for _, candidate := range values {
+		if strings.EqualFold(strings.TrimSpace(candidate), value) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeImage2CapabilitySize(size string) string {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "auto", "1024x1024", "2048x2048", "3840x2160", "4096x4096":
+		return strings.ToLower(strings.TrimSpace(size))
+	default:
+		return ""
+	}
+}
+
+func image2CapabilityProfileResolution(size string) string {
+	switch normalizeImage2CapabilitySize(size) {
+	case "auto", "1024x1024":
+		return "1024"
+	case "2048x2048":
+		return "2048"
+	case "3840x2160", "4096x4096":
+		return "uhd"
+	default:
+		return ""
+	}
 }
 
 func validateImage2CapabilityValues(field string, values []string, allowed map[string]struct{}) error {
