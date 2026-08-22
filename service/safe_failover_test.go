@@ -193,6 +193,19 @@ func TestEvaluateSafeFailover(t *testing.T) {
 			retry: true, reason: "image2_channel_local_error",
 		},
 		{
+			name: "Image2 channel status respects elapsed image guard",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				AttemptElapsed:     61 * time.Second,
+				ImageGuard:         60 * time.Second,
+				Error:              makeErr(http.StatusUnauthorized, types.ErrorCodeBadResponseStatusCode, "invalid upstream api key"),
+			},
+			reason: "image_guard_elapsed",
+		},
+		{
 			name: "Image2 channel status with acceptance evidence never switches",
 			input: SafeFailoverInput{
 				MaxAttempts:        1,
