@@ -14,6 +14,7 @@ const defaultOperationsSettings: OperationsSettings = {
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,
+  'image2.smart_routing.enabled': false,
   ChannelDisableThreshold: '',
   QuotaRemindThreshold: '',
   AutomaticDisableChannelEnabled: false,
