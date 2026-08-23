@@ -151,7 +151,7 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found && !isImageTaskPath(c.Request.URL.Path) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil {
 						if preferred.Status != common.ChannelStatusEnabled {
@@ -184,12 +184,14 @@ func Distribute() func(c *gin.Context) {
 				}
 
 				if channel == nil {
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+					selectionParam := &service.RetryParam{
 						Ctx:        c,
 						ModelName:  modelRequest.Model,
 						TokenGroup: usingGroup,
 						Retry:      common.GetPointer(0),
-					})
+					}
+					service.ApplyImageTaskChannelFilter(selectionParam, c.Request.URL.Path)
+					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(selectionParam)
 					if err != nil {
 						showGroup := usingGroup
 						if usingGroup == "auto" {
@@ -210,6 +212,10 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 			}
+		}
+		if channel != nil && !service.IsImageTaskChannelAllowed(c.Request.URL.Path, channel) {
+			abortWithOpenAiMessage(c, http.StatusBadRequest, "selected channel does not support the requested asynchronous image protocol")
+			return
 		}
 		if entitlementGrant != nil {
 			if err := model.ReserveEntitlementRequest(entitlementGrant); err != nil {

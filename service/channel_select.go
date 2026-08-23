@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -25,9 +26,10 @@ type RetryParam struct {
 	// Image2Router is an optional capability-ordered attempt chain. Keeping it
 	// on RetryParam lets the existing retry loop retain its de-duplication and
 	// stopping guarantees.
-	Image2Router       *Image2SmartRouter
-	excludedChannelIDs map[int]struct{}
-	resetNextTry       bool
+	Image2Router        *Image2SmartRouter
+	AllowedChannelTypes map[int]struct{}
+	excludedChannelIDs  map[int]struct{}
+	resetNextTry        bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -73,6 +75,40 @@ func (p *RetryParam) ExcludedChannelIDs() map[int]struct{} {
 		p.excludedChannelIDs = make(map[int]struct{})
 	}
 	return p.excludedChannelIDs
+}
+
+func (p *RetryParam) AllowsChannel(channel *model.Channel) bool {
+	if channel == nil || len(p.AllowedChannelTypes) == 0 {
+		return channel != nil
+	}
+	_, ok := p.AllowedChannelTypes[channel.Type]
+	return ok
+}
+
+// ApplyImageTaskChannelFilter binds each public async image contract to its
+// native provider channel type. This prevents a synchronous OpenAI-compatible
+// gpt-image-2 channel from being selected for a task endpoint with the same
+// model name.
+func ApplyImageTaskChannelFilter(param *RetryParam, path string) {
+	if param == nil {
+		return
+	}
+	switch {
+	case path == "/v1/images/batches" || strings.HasPrefix(path, "/v1/images/batches/"):
+		param.AllowedChannelTypes = map[int]struct{}{constant.ChannelTypeCodeFoxAsync: {}}
+	case path == "/v1/images/generations/jobs" || strings.HasPrefix(path, "/v1/images/generations/jobs/") ||
+		path == "/pg/images/jobs/generations" || strings.HasPrefix(path, "/pg/images/jobs/"):
+		param.AllowedChannelTypes = map[int]struct{}{constant.ChannelTypeAPIMart: {}}
+	}
+	if len(param.AllowedChannelTypes) > 0 {
+		param.ExhaustiveSafeFailover = true
+	}
+}
+
+func IsImageTaskChannelAllowed(path string, channel *model.Channel) bool {
+	param := &RetryParam{}
+	ApplyImageTaskChannelFilter(param, path)
+	return len(param.AllowedChannelTypes) == 0 || param.AllowsChannel(channel)
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -200,12 +236,17 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 
 func cacheGetRandomSatisfiedChannelExhaustive(param *RetryParam) (*model.Channel, string, error) {
 	if param.TokenGroup != "auto" {
-		channel, err := model.GetRandomSatisfiedChannelExcluding(
-			param.TokenGroup,
-			param.ModelName,
-			param.ExcludedChannelIDs(),
-		)
-		return channel, param.TokenGroup, err
+		for {
+			channel, err := model.GetRandomSatisfiedChannelExcluding(
+				param.TokenGroup,
+				param.ModelName,
+				param.ExcludedChannelIDs(),
+			)
+			if err != nil || channel == nil || param.AllowsChannel(channel) {
+				return channel, param.TokenGroup, err
+			}
+			param.ExcludeChannel(channel.Id)
+		}
 	}
 
 	if len(setting.GetAutoGroups()) == 0 {
@@ -229,18 +270,24 @@ func cacheGetRandomSatisfiedChannelExhaustive(param *RetryParam) (*model.Channel
 			break
 		}
 		autoGroup := autoGroups[i]
-		channel, err := model.GetRandomSatisfiedChannelExcluding(
-			autoGroup,
-			param.ModelName,
-			param.ExcludedChannelIDs(),
-		)
-		if err != nil {
-			return nil, autoGroup, err
-		}
-		if channel != nil {
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i)
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
-			return channel, autoGroup, nil
+		for {
+			channel, err := model.GetRandomSatisfiedChannelExcluding(
+				autoGroup,
+				param.ModelName,
+				param.ExcludedChannelIDs(),
+			)
+			if err != nil {
+				return nil, autoGroup, err
+			}
+			if channel == nil {
+				break
+			}
+			if param.AllowsChannel(channel) {
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i)
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+				return channel, autoGroup, nil
+			}
+			param.ExcludeChannel(channel.Id)
 		}
 		if !crossGroupRetry {
 			return nil, autoGroup, nil
