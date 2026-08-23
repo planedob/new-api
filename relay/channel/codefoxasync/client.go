@@ -153,6 +153,15 @@ func (r BatchRequest) Validate() error {
 	if key := strings.TrimSpace(r.IdempotencyKey); len([]rune(key)) > maxIDKeyRunes {
 		return fmt.Errorf("idempotency_key exceeds %d characters", maxIDKeyRunes)
 	}
+	if modelName := strings.TrimSpace(r.Model); modelName != "" && modelName != DefaultModel {
+		return fmt.Errorf("model must be %s", DefaultModel)
+	}
+	if size := strings.TrimSpace(r.Size); size != "" && size != "1024x1024" && size != "1024x1792" && size != "1792x1024" {
+		return fmt.Errorf("unsupported size %q", size)
+	}
+	if quality := strings.TrimSpace(r.Quality); quality != "" && quality != "standard" && quality != "hd" {
+		return fmt.Errorf("unsupported quality %q", quality)
+	}
 	if r.ReferenceImageURL != "" {
 		if err := validateHTTPURL(r.ReferenceImageURL, "reference_image_url"); err != nil {
 			return err

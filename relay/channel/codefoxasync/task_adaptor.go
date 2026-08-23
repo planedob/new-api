@@ -237,7 +237,16 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 			Object:     "image.batch",
 		})
 	}
-	return upstreamTaskID, sanitizeProviderBody(body, a.apiKey), nil
+	persisted, err := common.Marshal(PublicBatchSubmission{
+		Status:     status,
+		TotalCount: envelope.Data.TotalCount,
+		CreatedAt:  chooseCreatedAt(envelope.Data.CreatedAt),
+		Object:     "image.batch",
+	})
+	if err != nil {
+		return "", nil, newTaskError(err, "marshal_task_data_failed", http.StatusInternalServerError)
+	}
+	return upstreamTaskID, persisted, nil
 }
 
 // PublicBatchSubmission is the safe submit response. It contains only the
@@ -456,9 +465,21 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		result.Status = string(model.TaskStatusInProgress)
 		result.Progress = progressString(task.Progress)
 	case StatusCompleted:
+		if task.SucceededCount() <= 0 {
+			result.Status = string(model.TaskStatusFailure)
+			result.Progress = "100%"
+			result.Reason = "CodeFox batch task produced no successful images"
+			break
+		}
 		result.Status = string(model.TaskStatusSuccess)
 		result.Progress = "100%"
 	case StatusPartialSuccess:
+		if task.SucceededCount() <= 0 {
+			result.Status = string(model.TaskStatusFailure)
+			result.Progress = "100%"
+			result.Reason = "CodeFox batch task produced no successful images"
+			break
+		}
 		result.Status = string(model.TaskStatusSuccess)
 		result.Progress = "100%"
 		result.Reason = "PARTIAL_SUCCESS"

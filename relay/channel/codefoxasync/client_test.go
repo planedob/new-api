@@ -37,7 +37,7 @@ func TestClientSubmitPollAndFetchImageSuccess(t *testing.T) {
 			if err := common.Unmarshal(body, &request); err != nil {
 				t.Fatalf("decode submit body: %v", err)
 			}
-			if request.Model != DefaultModel || request.Size != "1536x1024" || request.Quality != "hd" {
+			if request.Model != DefaultModel || request.Size != "1792x1024" || request.Quality != "hd" {
 				t.Fatalf("normalized request = %#v", request)
 			}
 			if request.Seed == nil || *request.Seed != 0 {
@@ -75,7 +75,7 @@ func TestClientSubmitPollAndFetchImageSuccess(t *testing.T) {
 		IdempotencyKey:    "order-42",
 		ProductID:         "SKU-42",
 		Prompts:           []string{" front ", "side"},
-		Size:              "1536x1024",
+		Size:              "1792x1024",
 		Quality:           "hd",
 		Seed:              &seed,
 		ReferenceImageURL: "https://example.test/reference.png",
@@ -276,7 +276,7 @@ func TestTaskAdaptorUsesPublicIDAndMapsPartialBilling(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(`{"success":true,"data":{"task_id":"provider-task-1","status":"PENDING","total_count":3,"created_at":1717920000}}`)),
 	}
-	upstreamID, _, taskErr := adaptor.DoResponse(ctx, response, info)
+	upstreamID, taskData, taskErr := adaptor.DoResponse(ctx, response, info)
 	if taskErr != nil || upstreamID != "provider-task-1" {
 		t.Fatalf("DoResponse() id=%q err=%v", upstreamID, taskErr)
 	}
@@ -285,6 +285,9 @@ func TestTaskAdaptorUsesPublicIDAndMapsPartialBilling(t *testing.T) {
 	}
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("submit status = %d, want %d", recorder.Code, http.StatusAccepted)
+	}
+	if strings.Contains(string(taskData), "provider-task-1") {
+		t.Fatalf("persisted submit data leaked upstream id: %s", taskData)
 	}
 
 	partial := []byte(`{"success":true,"data":{"task_id":"provider-task-1","status":"PARTIAL_SUCCESS","progress":{"total":3,"success":2,"failed":1,"pending":0},"results":[{"item_index":0,"image_url":"https://provider.invalid/0"},{"item_index":1,"image_url":"https://provider.invalid/1"}],"errors":[{"item_index":2,"error_code":"CONTENT_POLICY_VIOLATION","error_message":"blocked"}]}}`)
@@ -298,6 +301,29 @@ func TestTaskAdaptorUsesPublicIDAndMapsPartialBilling(t *testing.T) {
 	quota := adaptor.AdjustBillingOnComplete(&model.Task{Quota: 300}, result)
 	if quota != 200 {
 		t.Fatalf("partial actual quota = %d, want 200", quota)
+	}
+}
+
+func TestTaskAdaptorZeroSuccessTerminalRefundsAsFailure(t *testing.T) {
+	body := []byte(`{"success":true,"data":{"task_id":"provider-task","status":"PARTIAL_SUCCESS","progress":{"total":2,"success":0,"failed":2,"pending":0},"errors":[{"item_index":0,"error_code":"POLICY"},{"item_index":1,"error_code":"POLICY"}]}}`)
+	result, err := (&TaskAdaptor{}).ParseTaskResult(body)
+	if err != nil {
+		t.Fatalf("ParseTaskResult() error = %v", err)
+	}
+	if result.Status != string(model.TaskStatusFailure) {
+		t.Fatalf("zero-success terminal status = %s, want FAILURE", result.Status)
+	}
+}
+
+func TestBatchRequestRejectsUndocumentedCostShapes(t *testing.T) {
+	for _, request := range []BatchRequest{
+		{Prompts: []string{"one"}, Model: "other-model"},
+		{Prompts: []string{"one"}, Size: "2048x2048"},
+		{Prompts: []string{"one"}, Quality: "ultra"},
+	} {
+		if _, err := request.Normalize(); err == nil {
+			t.Fatalf("undocumented request unexpectedly accepted: %#v", request)
+		}
 	}
 }
 
