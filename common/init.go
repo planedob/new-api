@@ -117,7 +117,7 @@ func InitEnv() {
 	}
 	Image2SmartRoutingEnvEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
 	SetImage2SmartRoutingEnabled(Image2SmartRoutingEnvEnabled)
-	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeAdvanced))
+	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeLegacy))
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
 	// Initialize string variables with GetEnvOrDefaultString
@@ -146,7 +146,7 @@ func InitEnv() {
 func normalizeImage2RouteMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
-		return Image2RouteModeAdvanced
+		return Image2RouteModeLegacy
 	case Image2RouteModeLegacy:
 		return Image2RouteModeLegacy
 	case Image2RouteModeObserve:

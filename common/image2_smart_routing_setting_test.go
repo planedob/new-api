@@ -30,6 +30,10 @@ func TestResolveImage2SmartRoutingEnabledUsesDatabaseOverride(t *testing.T) {
 	}
 }
 
+func TestImage2SmartRoutingDefaultGateIsDisabled(t *testing.T) {
+	assert.False(t, ResolveImage2SmartRoutingEnabled(false, "", false))
+}
+
 func TestParseImage2SmartRoutingSettingRejectsInvalidValues(t *testing.T) {
 	for _, value := range []string{"", "enabled", "true-ish", "null"} {
 		_, err := ParseImage2SmartRoutingSetting(value)
