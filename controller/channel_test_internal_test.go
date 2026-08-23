@@ -58,6 +58,7 @@ func TestChannelTestUnpricedCandidateBypassesOnlySyntheticRelayInfo(t *testing.T
 		}
 	}
 	ordinaryInfo := newInfo()
+	ordinaryInfo.UserSetting.AcceptUnsetRatioModel = true
 	_, err := relayhelper.ModelPriceHelper(ctx, ordinaryInfo, 0, &types.TokenCountMeta{})
 	require.Error(t, err)
 	require.ErrorContains(t, err, ordinaryInfo.OriginModelName)
@@ -67,7 +68,7 @@ func TestChannelTestUnpricedCandidateBypassesOnlySyntheticRelayInfo(t *testing.T
 	priceData, err := relayhelper.ModelPriceHelper(ctx, testInfo, 0, &types.TokenCountMeta{})
 	require.NoError(t, err)
 	assert.False(t, priceData.UsePrice)
-	assert.False(t, ordinaryInfo.UserSetting.AcceptUnsetRatioModel)
+	assert.True(t, ordinaryInfo.UserSetting.AcceptUnsetRatioModel)
 }
 
 func TestNormalizeChannelTestEndpointReusesSharedChannelProtocol(t *testing.T) {

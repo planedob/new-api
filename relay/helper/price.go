@@ -97,10 +97,11 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
 		if !success {
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
+			// An unpriced model may only pass this gate for the synthetic
+			// administrator channel-test RelayInfo.  The persisted user setting
+			// is not an authorization boundary: ordinary users can write it via
+			// /api/user/setting, so accepting it here would bypass pricing.
+			acceptUnsetRatio := info.IsChannelTest
 			if !acceptUnsetRatio {
 				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
@@ -183,10 +184,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			var ratioSuccess bool
 			var matchName string
 			modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
+			// Keep the per-call path fail-closed as well; it can be reached by
+			// asynchronous image/task requests and must not trust a user-owned
+			// persisted setting.
+			acceptUnsetRatio := info.IsChannelTest
 			if !ratioSuccess && !acceptUnsetRatio {
 				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
