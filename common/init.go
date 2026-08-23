@@ -116,7 +116,7 @@ func InitEnv() {
 		SafeFailoverImageGuardSeconds = 60
 	}
 	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
-	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeAdvanced))
+	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeLegacy))
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
 	// Initialize string variables with GetEnvOrDefaultString

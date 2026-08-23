@@ -161,7 +161,7 @@ const (
 	Image2RouteModeLegacy  = "legacy"
 )
 
-var Image2RouteMode = Image2RouteModeAdvanced
+var Image2RouteMode = Image2RouteModeLegacy
 
 // EntitlementFeatureEnabled gates the directed entitlement enforcement path.
 // Operators can set ENTITLEMENT_FEATURE_ENABLED=false for an emergency rollback

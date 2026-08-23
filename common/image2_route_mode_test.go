@@ -8,7 +8,7 @@ func TestNormalizeImage2RouteMode(t *testing.T) {
 		value string
 		want  string
 	}{
-		{name: "default", value: "", want: Image2RouteModeAdvanced},
+		{name: "default is legacy", value: "", want: Image2RouteModeLegacy},
 		{name: "advanced", value: "advanced", want: Image2RouteModeAdvanced},
 		{name: "observe ignores case and surrounding whitespace", value: " OBSERVE ", want: Image2RouteModeObserve},
 		{name: "legacy ignores case and surrounding whitespace", value: " LEGACY ", want: Image2RouteModeLegacy},
