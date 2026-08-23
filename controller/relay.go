@@ -765,10 +765,10 @@ func shouldRetryTaskRelay(c *gin.Context, channel *model.Channel, taskErr *dto.T
 	if taskErr == nil {
 		return false
 	}
-	// SecureSkill MiniMax H3 task creation is also non-idempotent: a provider
-	// 5xx/timeout can arrive after the POST has been accepted.  Never replay
-	// that POST (or charge a second time) through the generic retry loop.
-	if channel != nil && channel.Type == constant.ChannelTypeSecureSkill {
+	// Native async task creation is non-idempotent from Aibuff's point of view:
+	// a 5xx/timeout can arrive after the provider accepted the POST. Never
+	// replay it (or charge a second time) through the generic retry loop.
+	if channel != nil && isNoReplayTaskChannel(channel.Type) {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
@@ -807,4 +807,13 @@ func shouldRetryTaskRelay(c *gin.Context, channel *model.Channel, taskErr *dto.T
 		return false
 	}
 	return true
+}
+
+func isNoReplayTaskChannel(channelType int) bool {
+	switch channelType {
+	case constant.ChannelTypeSecureSkill, constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
+		return true
+	default:
+		return false
+	}
 }

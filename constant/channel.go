@@ -59,7 +59,11 @@ const (
 	// It is intentionally separate from ChannelTypeMiniMax, whose existing
 	// adapter targets the legacy Hailuo contract.
 	ChannelTypeSecureSkill = 58
-	ChannelTypeDummy       // this one is only for count, do not add any channel after this
+	// APIMart and CodeFoxAsync intentionally use distinct task channel types.
+	// APIMart historically used 58; that value now belongs to SecureSkill H3.
+	ChannelTypeAPIMart      = 59
+	ChannelTypeCodeFoxAsync = 60
+	ChannelTypeDummy        // this one is only for count, do not add any channel after this
 
 )
 
@@ -123,6 +127,8 @@ var ChannelBaseURLs = []string{
 	"https://api.replicate.com",                 //56
 	"https://chatgpt.com",                       //57
 	"",                                          //58 SecureSkill (must be configured explicitly)
+	"",                                          //59 APIMart (must be configured explicitly)
+	"",                                          //60 CodeFoxAsync (must be configured explicitly)
 }
 
 var ChannelTypeNames = map[int]string{
@@ -181,6 +187,8 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeReplicate:      "Replicate",
 	ChannelTypeCodex:          "Codex",
 	ChannelTypeSecureSkill:    "SecureSkill",
+	ChannelTypeAPIMart:        "APIMart",
+	ChannelTypeCodeFoxAsync:   "CodeFoxAsync",
 }
 
 func GetChannelTypeName(channelType int) string {

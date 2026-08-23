@@ -20,3 +20,24 @@ func TestPath2RelayModePlaygroundImages(t *testing.T) {
 		})
 	}
 }
+
+func TestPath2RelayModeImageTasks(t *testing.T) {
+	tests := []struct {
+		path string
+		want int
+	}{
+		{path: "/v1/images/generations/jobs", want: RelayModeImageTaskSubmit},
+		{path: "/v1/images/generations/jobs/task_public", want: RelayModeImageTaskFetchByID},
+		{path: "/v1/images/batches", want: RelayModeImageTaskSubmit},
+		{path: "/v1/images/batches/task_public", want: RelayModeImageTaskFetchByID},
+		{path: "/pg/images/jobs/generations", want: RelayModeImageTaskSubmit},
+		{path: "/pg/images/jobs/task_public", want: RelayModeImageTaskFetchByID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := Path2RelayMode(tt.path); got != tt.want {
+				t.Fatalf("Path2RelayMode(%q) = %d, want %d", tt.path, got, tt.want)
+			}
+		})
+	}
+}

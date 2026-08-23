@@ -279,9 +279,10 @@ func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float6
 }
 
 var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp *dto.TaskError){
-	relayconstant.RelayModeSunoFetchByID:  sunoFetchByIDRespBodyBuilder,
-	relayconstant.RelayModeSunoFetch:      sunoFetchRespBodyBuilder,
-	relayconstant.RelayModeVideoFetchByID: videoFetchByIDRespBodyBuilder,
+	relayconstant.RelayModeSunoFetchByID:      sunoFetchByIDRespBodyBuilder,
+	relayconstant.RelayModeSunoFetch:          sunoFetchRespBodyBuilder,
+	relayconstant.RelayModeVideoFetchByID:     videoFetchByIDRespBodyBuilder,
+	relayconstant.RelayModeImageTaskFetchByID: imageTaskFetchByIDRespBodyBuilder,
 }
 
 func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
@@ -413,6 +414,33 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
 	}
 	return
+}
+
+func imageTaskFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.TaskError) {
+	taskID := c.Param("task_id")
+	if taskID == "" {
+		taskID = c.Param("id")
+	}
+	originTask, exist, err := model.GetByTaskId(c.GetInt("id"), taskID)
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "get_task_failed", http.StatusInternalServerError)
+	}
+	if !exist {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusNotFound)
+	}
+	adaptor := GetTaskAdaptor(originTask.Platform)
+	if adaptor == nil {
+		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid task platform: %s", originTask.Platform), "invalid_task_platform", http.StatusBadRequest)
+	}
+	converter, ok := adaptor.(channel.OpenAIImageTaskConverter)
+	if !ok {
+		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("image task conversion is not implemented for %s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
+	}
+	respBody, err = converter.ConvertToOpenAIImageTask(originTask)
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "convert_to_openai_image_task_failed", http.StatusInternalServerError)
+	}
+	return respBody, nil
 }
 
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。

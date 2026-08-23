@@ -81,3 +81,10 @@ type TaskAdaptor interface {
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
+
+// OpenAIImageTaskConverter renders a persisted provider task into the public
+// asynchronous image-job contract. Polling is read-only: implementations must
+// only use the supplied task snapshot and must never call the upstream here.
+type OpenAIImageTaskConverter interface {
+	ConvertToOpenAIImageTask(originTask *model.Task) ([]byte, error)
+}

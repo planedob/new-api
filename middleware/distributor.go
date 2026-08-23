@@ -281,6 +281,15 @@ func isImageEditsPath(path string) bool {
 	return strings.HasPrefix(path, "/v1/images/edits") || strings.HasPrefix(path, "/pg/images/edits")
 }
 
+func isImageTaskPath(path string) bool {
+	return path == "/v1/images/generations/jobs" ||
+		strings.HasPrefix(path, "/v1/images/generations/jobs/") ||
+		path == "/v1/images/batches" ||
+		strings.HasPrefix(path, "/v1/images/batches/") ||
+		path == "/pg/images/jobs/generations" ||
+		strings.HasPrefix(path, "/pg/images/jobs/")
+}
+
 func getPlaygroundGroup(c *gin.Context) (string, error) {
 	if !isPlaygroundPath(c.Request.URL.Path) {
 		return "", nil
@@ -343,6 +352,20 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		c.Set("platform", string(constant.TaskPlatformSuno))
 		c.Set("relay_mode", relayMode)
+	} else if isImageTaskPath(c.Request.URL.Path) {
+		if c.Request.Method == http.MethodPost {
+			req, err := getModelFromRequest(c)
+			if err != nil {
+				return nil, false, err
+			}
+			if req != nil {
+				modelRequest.Model = req.Model
+			}
+			c.Set("relay_mode", relayconstant.RelayModeImageTaskSubmit)
+		} else if c.Request.Method == http.MethodGet {
+			shouldSelectChannel = false
+			c.Set("relay_mode", relayconstant.RelayModeImageTaskFetchByID)
+		}
 	} else if strings.Contains(c.Request.URL.Path, "/v1/videos/") && strings.HasSuffix(c.Request.URL.Path, "/remix") {
 		relayMode := relayconstant.RelayModeVideoSubmit
 		c.Set("relay_mode", relayMode)

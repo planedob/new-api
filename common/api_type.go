@@ -75,6 +75,10 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeReplicate
 	case constant.ChannelTypeCodex:
 		apiType = constant.APITypeCodex
+	case constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
+		// These providers use the task relay for their native asynchronous image
+		// contracts; OpenAI remains the administrative compatibility category.
+		apiType = constant.APITypeOpenAI
 	}
 	if apiType == -1 {
 		return constant.APITypeOpenAI, false

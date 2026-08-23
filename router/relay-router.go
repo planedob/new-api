@@ -72,12 +72,33 @@ func SetRelayRouter(router *gin.Engine) {
 		playgroundRouter.POST("/images/generations", controller.Playground)
 		playgroundRouter.POST("/images/edits", controller.Playground)
 	}
+	playgroundImageJobRouter := router.Group("/pg/images/jobs")
+	playgroundImageJobRouter.Use(middleware.RouteTag("relay"))
+	playgroundImageJobRouter.Use(middleware.RelayErrorAudit())
+	playgroundImageJobRouter.Use(middleware.SystemPerformanceCheck())
+	playgroundImageJobRouter.Use(middleware.UserAuth(), middleware.Distribute())
+	{
+		playgroundImageJobRouter.POST("/generations", controller.RelayTask)
+		playgroundImageJobRouter.GET("/:task_id", controller.RelayTaskFetch)
+	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.RelayErrorAudit())
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
+	{
+		// Opt-in durable image jobs. Submit selects exactly one channel; polling
+		// is user-scoped and Distribute recognizes it as a read-only task fetch.
+		imageJobRouter := relayV1Router.Group("")
+		imageJobRouter.Use(middleware.Distribute())
+		imageJobRouter.POST("/images/generations/jobs", controller.RelayTask)
+		imageJobRouter.GET("/images/generations/jobs/:task_id", controller.RelayTaskFetch)
+		// CodeFox's native e-commerce batch protocol is exposed separately so a
+		// normal OpenAI n>1 request never changes response shape implicitly.
+		imageJobRouter.POST("/images/batches", controller.RelayTask)
+		imageJobRouter.GET("/images/batches/:task_id", controller.RelayTaskFetch)
+	}
 	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")

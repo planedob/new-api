@@ -357,7 +357,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	// Do not let a stale provider response or duplicate worker turn a
 	// completed task back into another terminal state.  Other video channels
 	// retain their existing polling behavior.
-	if ch.Type == constant.ChannelTypeSecureSkill && isTerminalVideoTaskStatus(task.Status) {
+	if isTerminalProtectedTaskChannel(ch.Type) && isTerminalVideoTaskStatus(task.Status) {
 		return nil
 	}
 	key := ch.Key
@@ -470,7 +470,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		// SecureSkill H3 must not refund a duplicate/stale terminal poll. Keep
 		// the legacy refund behavior for every other video channel; changing
 		// their late SUCCESS -> FAILURE semantics is outside this candidate.
-		if quota != 0 && (ch.Type != constant.ChannelTypeSecureSkill ||
+		if quota != 0 && (!isTerminalProtectedTaskChannel(ch.Type) ||
 			(snap.Status != model.TaskStatusFailure && snap.Status != model.TaskStatusSuccess)) {
 			shouldRefund = true
 		}
@@ -514,6 +514,15 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 
 func isTerminalVideoTaskStatus(status model.TaskStatus) bool {
 	return status == model.TaskStatusSuccess || status == model.TaskStatusFailure
+}
+
+func isTerminalProtectedTaskChannel(channelType int) bool {
+	switch channelType {
+	case constant.ChannelTypeSecureSkill, constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
+		return true
+	default:
+		return false
+	}
 }
 
 func redactVideoResponseBody(body []byte) []byte {

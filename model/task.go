@@ -175,7 +175,9 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeSecureSkill {
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeSecureSkill ||
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeAPIMart ||
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeCodeFoxAsync {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
 		}
 		if relayInfo.UpstreamModelName != "" {
