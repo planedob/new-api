@@ -2,7 +2,10 @@ package service
 
 import (
 	"fmt"
+	"math"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -11,8 +14,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const relayErrorLogRecordedKey = "relay_error_log_recorded_error"
-const relayErrorLogRecordedAnyKey = "relay_error_log_recorded_any"
+const (
+	relayErrorLogRecordedKey          = "relay_error_log_recorded_error"
+	relayErrorLogRecordedAnyKey       = "relay_error_log_recorded_any"
+	relayErrorLogPersistenceFailedKey = "relay_error_log_persistence_failed"
+	relayErrorEventVersion            = 1
+	maxRelayErrorLogDimensionRunes    = 128
+	maxRelayErrorLogExtraRunes        = 512
+)
+
+type RelayErrorBillingState string
+
+const (
+	RelayErrorBillingUnknown       RelayErrorBillingState = "unknown"
+	RelayErrorBillingNotStarted    RelayErrorBillingState = "not_started"
+	RelayErrorBillingNotApplicable RelayErrorBillingState = "not_applicable"
+	RelayErrorBillingPreConsumed   RelayErrorBillingState = "pre_consumed"
+)
 
 // RelayErrorLogOptions describes where a relay request failed. Channel is nil
 // when the request never reached an upstream; such failures are still useful
@@ -23,6 +41,9 @@ type RelayErrorLogOptions struct {
 	ModelName      string
 	Group          string
 	UpstreamCalled bool
+	BillingState   RelayErrorBillingState
+	Charged        *bool
+	Image2         *Image2RequestCapability
 	Extra          map[string]interface{}
 }
 
@@ -42,18 +63,61 @@ func safeRelayErrorLogExtra(extra map[string]interface{}) map[string]interface{}
 	}
 	safe := make(map[string]interface{}, len(extra))
 	for key, value := range extra {
-		if _, ok := relayErrorLogExtraAllowlist[key]; ok {
-			safe[key] = value
+		if _, ok := relayErrorLogExtraAllowlist[key]; !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			safe[key] = boundedRelayErrorLogText(typed, maxRelayErrorLogExtraRunes)
+		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			safe[key] = typed
+		case float32:
+			if !math.IsNaN(float64(typed)) && !math.IsInf(float64(typed), 0) {
+				safe[key] = typed
+			}
+		case float64:
+			if !math.IsNaN(typed) && !math.IsInf(typed, 0) {
+				safe[key] = typed
+			}
 		}
 	}
 	return safe
+}
+
+func boundedRelayErrorLogText(value string, maxRunes int) string {
+	value = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:maxRunes]) + "...[truncated]"
+}
+
+func normalizeRelayErrorBillingState(state RelayErrorBillingState) RelayErrorBillingState {
+	switch state {
+	case RelayErrorBillingNotStarted, RelayErrorBillingNotApplicable, RelayErrorBillingPreConsumed:
+		return state
+	default:
+		return RelayErrorBillingUnknown
+	}
 }
 
 // RecordRelayErrorLog persists both channel-attempt errors and failures that
 // happen before any upstream is selected. It deliberately respects the
 // existing global log switch and per-error no-record option.
 func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayErrorLogOptions) bool {
-	if c == nil || err == nil || !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
+	if c == nil || err == nil {
+		return false
+	}
+	if options.Image2 != nil && options.Stage == "channel_selection" && options.Channel == nil {
+		ObserveImage2PreRouteFailure(c, *options.Image2, err.StatusCode, err.GetErrorCode())
+	}
+	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
 		return false
 	}
 
@@ -62,10 +126,12 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	if modelName == "" {
 		modelName = c.GetString("original_model")
 	}
+	modelName = boundedRelayErrorLogText(modelName, maxRelayErrorLogDimensionRunes)
 	group := options.Group
 	if group == "" {
 		group = c.GetString("group")
 	}
+	group = boundedRelayErrorLogText(group, maxRelayErrorLogDimensionRunes)
 
 	channelID := 0
 	channelName := ""
@@ -78,10 +144,14 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		isMultiKey = options.Channel.IsMultiKey
 	}
 
-	other := make(map[string]interface{}, len(options.Extra)+8)
-	if c.Request != nil && c.Request.URL != nil {
+	other := make(map[string]interface{}, len(options.Extra)+16)
+	// Image2 pre-route evidence intentionally omits the URL because query
+	// strings can carry client material. Existing non-Image2 diagnostics keep
+	// their established request_path field.
+	if options.Image2 == nil && c.Request != nil && c.Request.URL != nil {
 		other["request_path"] = c.Request.URL.Path
 	}
+	other["event_version"] = relayErrorEventVersion
 	other["error_stage"] = options.Stage
 	other["error_type"] = err.GetErrorType()
 	other["error_code"] = err.GetErrorCode()
@@ -92,6 +162,22 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	// This is explicit rather than inferred from channel_id: a selected channel
 	// can still fail before its adapter sends anything upstream.
 	other["upstream_called"] = options.UpstreamCalled
+	if options.Image2 != nil {
+		other["failure_scope"] = "pre_upstream"
+		other["billing_state"] = normalizeRelayErrorBillingState(options.BillingState)
+		other["request_route"] = "images"
+		other["request_method"] = requestMethod(c)
+		other["elapsed_ms"] = relayPassiveElapsed(c).Milliseconds()
+		if options.Charged != nil {
+			other["charge_known"] = true
+			other["charged"] = *options.Charged
+		} else if options.BillingState == RelayErrorBillingNotStarted || options.BillingState == RelayErrorBillingNotApplicable {
+			other["charge_known"] = true
+			other["charged"] = false
+		} else {
+			other["charge_known"] = false
+		}
+	}
 	for key, value := range safeRelayErrorLogExtra(options.Extra) {
 		other[key] = value
 	}
@@ -103,6 +189,9 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		adminInfo["is_multi_key"] = true
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
+	if options.Image2 != nil {
+		adminInfo["image2_request_capability"] = image2CapabilitySummary(*options.Image2)
+	}
 	AppendChannelAffinityAdminInfo(c, adminInfo)
 	other["admin_info"] = adminInfo
 
@@ -111,7 +200,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		startTime = time.Now()
 	}
 	useTimeSeconds := int(time.Since(startTime).Seconds())
-	model.RecordErrorLog(
+	if persistErr := model.RecordErrorLogWithResult(
 		c,
 		userID,
 		channelID,
@@ -127,10 +216,29 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		common.GetContextKeyBool(c, constant.ContextKeyIsStream),
 		group,
 		other,
-	)
+	); persistErr != nil {
+		c.Set(relayErrorLogPersistenceFailedKey, true)
+		return false
+	}
 	c.Set(relayErrorLogRecordedKey, err)
 	c.Set(relayErrorLogRecordedAnyKey, true)
 	return true
+}
+
+func requestMethod(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	return boundedRelayErrorLogText(c.Request.Method, 16)
+}
+
+func image2CapabilitySummary(capability Image2RequestCapability) string {
+	return fmt.Sprintf("operation=%s resolution=%s quality=%s n=%d",
+		boundedRelayErrorLogText(capability.Operation, 32),
+		boundedRelayErrorLogText(capability.Resolution, 32),
+		boundedRelayErrorLogText(capability.Quality, 32),
+		capability.N,
+	)
 }
 
 // HasRelayErrorLog reports whether any structured error event has already
@@ -155,4 +263,10 @@ func WasRelayErrorLogged(c *gin.Context, err *types.NewAPIError) bool {
 		return false
 	}
 	return recorded == err
+}
+
+// RelayErrorLogPersistenceFailed lets callers surface a fail-closed
+// observability decision without exposing the database error itself.
+func RelayErrorLogPersistenceFailed(c *gin.Context) bool {
+	return c != nil && c.GetBool(relayErrorLogPersistenceFailedKey)
 }

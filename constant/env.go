@@ -10,11 +10,21 @@ var GetMediaToken bool
 var GetMediaTokenNotStream bool
 var UpdateTask bool
 var MaxRequestBodyMB int
+
+// MaxImage2InputMB bounds each Image2 multipart image or mask before any
+// upstream call. It is intentionally separate from the generic request-body
+// limit and provider capability profiles.
+var MaxImage2InputMB int
 var AzureDefaultAPIVersion string
 var NotifyLimitCount int
 var NotificationLimitDurationMinute int
 var GenerateDefaultToken bool
 var ErrorLogEnabled bool
+
+// Image2PassiveMonitorEnabled gates the in-process Image2 operational monitor.
+// It is deliberately separate from searchable error-log persistence so an
+// operator can keep the monitor disabled while retaining existing error logs.
+var Image2PassiveMonitorEnabled bool
 var TaskQueryLimit int
 var TaskTimeoutMinutes int
 

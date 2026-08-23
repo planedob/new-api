@@ -2,6 +2,8 @@ package controller
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,9 +44,11 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context              *gin.Context
+	localErr             error
+	newAPIError          *types.NewAPIError
+	image2Evidence       *dto.Image2FixedChannelTestEvidence
+	image2EvidenceSHA256 string
 }
 
 func prepareChannelTestRelayInfo(info *relaycommon.RelayInfo) {
@@ -64,7 +68,6 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if normalized != "" {
 		return normalized
 	}
-
 	// The one-click channel test is intentionally capability-driven. Reuse the
 	// model-plaza endpoint metadata when it is loaded, then fall back to the
 	// shared channel/model endpoint matrix. This keeps the test button aligned
@@ -477,6 +480,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		}
 	}
 	var requestBody io.Reader
+	var requestBytes []byte
 	if multipartBody, ok := convertedRequest.(*bytes.Buffer); ok {
 		if len(info.ParamOverride) > 0 {
 			err := errors.New("parameter override is unsupported for multipart image edit channel tests")
@@ -486,7 +490,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				newAPIError: types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid),
 			}
 		}
-		requestBytes := append([]byte(nil), multipartBody.Bytes()...)
+		requestBytes = append([]byte(nil), multipartBody.Bytes()...)
 		requestBody = bytes.NewReader(requestBytes)
 		c.Request.Body = io.NopCloser(bytes.NewReader(requestBytes))
 	} else {
@@ -515,8 +519,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				}
 			}
 		}
-		requestBody = bytes.NewReader(jsonData)
-		c.Request.Body = io.NopCloser(bytes.NewReader(jsonData))
+		requestBytes = append([]byte(nil), jsonData...)
+		requestBody = bytes.NewReader(requestBytes)
+		c.Request.Body = io.NopCloser(bytes.NewReader(requestBytes))
 	}
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
@@ -581,6 +586,20 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
+	image2Evidence, image2EvidenceSHA256, evidenceErr := buildImage2ChannelTestEvidence(
+		channel,
+		constant.EndpointType(endpointType),
+		time.Now().UTC().Truncate(time.Second),
+		requestBytes,
+		respBody,
+	)
+	if evidenceErr != nil {
+		return testResult{
+			context:     c,
+			localErr:    evidenceErr,
+			newAPIError: types.NewError(evidenceErr, types.ErrorCodeConvertRequestFailed),
+		}
+	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)
@@ -603,10 +622,66 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:              c,
+		localErr:             nil,
+		newAPIError:          nil,
+		image2Evidence:       image2Evidence,
+		image2EvidenceSHA256: image2EvidenceSHA256,
 	}
+}
+
+func buildImage2ChannelTestEvidence(
+	channel *model.Channel,
+	endpoint constant.EndpointType,
+	testedAt time.Time,
+	requestBytes []byte,
+	responseBytes []byte,
+) (*dto.Image2FixedChannelTestEvidence, string, error) {
+	operation := ""
+	endpointPath := ""
+	switch endpoint {
+	case constant.EndpointTypeImageGeneration:
+		operation = "generations"
+		endpointPath = "/v1/images/generations"
+	case constant.EndpointTypeImageEdits:
+		operation = "edits"
+		endpointPath = "/v1/images/edits"
+	default:
+		return nil, "", nil
+	}
+	if channel == nil {
+		return nil, "", errors.New("image2 channel test evidence requires a channel")
+	}
+	capability := channel.GetSetting().Image2Capability
+	if capability == nil || !capability.Enabled {
+		return nil, "", nil
+	}
+	if err := capability.Validate(); err != nil {
+		return nil, "", fmt.Errorf("image2 channel test capability is invalid: %w", err)
+	}
+	capabilityDigest, err := dto.Image2CapabilitySHA256(capability)
+	if err != nil {
+		return nil, "", err
+	}
+	requestDigest := sha256.Sum256(requestBytes)
+	responseDigest := sha256.Sum256(responseBytes)
+	evidence := &dto.Image2FixedChannelTestEvidence{
+		ChannelID:        channel.Id,
+		Operation:        operation,
+		Endpoint:         endpointPath,
+		TestedAt:         testedAt.UTC().Format(time.RFC3339),
+		Status:           "passed",
+		StatusCode:       http.StatusOK,
+		RequestCount:     1,
+		RequestSHA256:    hex.EncodeToString(requestDigest[:]),
+		ResponseSHA256:   hex.EncodeToString(responseDigest[:]),
+		CapabilitySHA256: capabilityDigest,
+	}
+	evidenceDigest, err := dto.Image2FixedChannelTestEvidenceSHA256(*evidence)
+	if err != nil {
+		return nil, "", err
+	}
+	return evidence, evidenceDigest, nil
 }
 
 func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Request) error {
@@ -1042,11 +1117,16 @@ func TestChannel(c *gin.Context) {
 		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"success": true,
 		"message": "",
 		"time":    consumedTime,
-	})
+	}
+	if result.image2Evidence != nil {
+		response["image2_evidence"] = result.image2Evidence
+		response["image2_evidence_sha256"] = result.image2EvidenceSHA256
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 var testAllChannelsLock sync.Mutex

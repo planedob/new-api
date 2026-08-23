@@ -109,6 +109,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		logger.LogError(c, "invalid response or response body")
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	markOpenAIImageUpstreamAccepted(info, resp)
 
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -558,8 +559,19 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 	return err
 }
 
+func markOpenAIImageUpstreamAccepted(info *relaycommon.RelayInfo, resp *http.Response) {
+	if service.IsImage2SmartRoute(info) && resp != nil &&
+		resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		info.UpstreamAccepted = true
+	}
+}
+
 func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
+	// A 2xx Image2 response is already accepted upstream. Mark this before
+	// body reads and local parsing so any later error cannot replay a
+	// non-idempotent generation/edit request on another channel.
+	markOpenAIImageUpstreamAccepted(info, resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {

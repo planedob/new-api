@@ -115,7 +115,9 @@ func InitEnv() {
 		SysLog("SAFE_FAILOVER_IMAGE_GUARD_SECONDS must be positive; using 60")
 		SafeFailoverImageGuardSeconds = 60
 	}
-	Image2SmartRoutingEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
+	Image2SmartRoutingEnvEnabled = GetEnvOrDefaultBool("IMAGE2_SMART_ROUTING_ENABLED", false)
+	SetImage2SmartRoutingEnabled(Image2SmartRoutingEnvEnabled)
+	Image2RouteMode = normalizeImage2RouteMode(GetEnvOrDefaultString("IMAGE2_ROUTE_MODE", Image2RouteModeLegacy))
 	EntitlementFeatureEnabled = GetEnvOrDefaultBool("ENTITLEMENT_FEATURE_ENABLED", true)
 
 	// Initialize string variables with GetEnvOrDefaultString
@@ -141,6 +143,23 @@ func InitEnv() {
 	initConstantEnv()
 }
 
+func normalizeImage2RouteMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return Image2RouteModeLegacy
+	case Image2RouteModeLegacy:
+		return Image2RouteModeLegacy
+	case Image2RouteModeObserve:
+		return Image2RouteModeObserve
+	case Image2RouteModeAdvanced:
+		return Image2RouteModeAdvanced
+	default:
+		// An invalid environment value must not silently activate a looser
+		// routing policy. Fall back to the established selector path.
+		return Image2RouteModeLegacy
+	}
+}
+
 func initConstantEnv() {
 	constant.StreamingTimeout = GetEnvOrDefault("STREAMING_TIMEOUT", 300)
 	constant.DifyDebug = GetEnvOrDefaultBool("DIFY_DEBUG", true)
@@ -148,6 +167,9 @@ func initConstantEnv() {
 	constant.StreamScannerMaxBufferMB = GetEnvOrDefault("STREAM_SCANNER_MAX_BUFFER_MB", 128)
 	// MaxRequestBodyMB 请求体最大大小（解压后），用于防止超大请求/zip bomb导致内存暴涨
 	constant.MaxRequestBodyMB = GetEnvOrDefault("MAX_REQUEST_BODY_MB", 128)
+	// MaxImage2InputMB bounds each Image2 multipart image or mask before the
+	// request reaches a provider. Keep this separate from provider profiles.
+	constant.MaxImage2InputMB = GetEnvOrDefault("IMAGE2_MAX_INPUT_MB", 50)
 	// ForceStreamOption 覆盖请求参数，强制返回usage信息
 	constant.ForceStreamOption = GetEnvOrDefaultBool("FORCE_STREAM_OPTION", true)
 	constant.CountToken = GetEnvOrDefaultBool("CountToken", true)
@@ -161,6 +183,8 @@ func initConstantEnv() {
 	constant.GenerateDefaultToken = GetEnvOrDefaultBool("GENERATE_DEFAULT_TOKEN", false)
 	// 是否启用错误日志
 	constant.ErrorLogEnabled = GetEnvOrDefaultBool("ERROR_LOG_ENABLED", false)
+	// Image2 被动监控只聚合固定维度，默认关闭，不影响现有请求路径。
+	constant.Image2PassiveMonitorEnabled = GetEnvOrDefaultBool("IMAGE2_PASSIVE_MONITOR_ENABLED", false)
 	// 任务轮询时查询的最大数量
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。

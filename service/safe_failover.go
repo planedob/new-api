@@ -10,12 +10,17 @@ import (
 )
 
 type SafeFailoverInput struct {
-	RetryIndex            int
-	MaxAttempts           int
-	RelayMode             int
-	ModelName             string
+	RetryIndex  int
+	MaxAttempts int
+	RelayMode   int
+	ModelName   string
+	// Image2SmartRouting marks the exact Image2 route. It keeps the
+	// channel-local 4xx/3xx policy explicit instead of relying only on the
+	// generic status table.
+	Image2SmartRouting    bool
 	IsStream              bool
 	ResponseWritten       bool
+	UpstreamAccepted      bool
 	ReceivedResponseCount int
 	AttemptElapsed        time.Duration
 	ImageGuard            time.Duration
@@ -43,6 +48,9 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 	}
 	if input.ResponseWritten || input.ReceivedResponseCount > 0 {
 		return SafeFailoverDecision{Reason: "response_started"}
+	}
+	if input.UpstreamAccepted {
+		return SafeFailoverDecision{Reason: "upstream_accepted"}
 	}
 	if types.IsSkipRetryError(input.Error) {
 		return SafeFailoverDecision{Reason: "skip_retry_error"}
@@ -81,6 +89,15 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 		return SafeFailoverDecision{Reason: "image_guard_elapsed"}
 	}
 
+	// Image2 channel configuration failures must not turn into a customer
+	// failure when another compatible channel remains. Keep this after the
+	// image elapsed-time guard as well as the response/acceptance/safety guards:
+	// an accepted, written, or already-too-long image attempt must never be
+	// replayed, even when its status is channel-like.
+	if input.Image2SmartRouting && isImage2ChannelLocalStatus(code) {
+		return SafeFailoverDecision{Retry: true, Reason: "image2_channel_local_error"}
+	}
+
 	if code >= 200 && code < 300 {
 		return SafeFailoverDecision{Reason: "success_status"}
 	}
@@ -106,6 +123,10 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 	default:
 		return SafeFailoverDecision{Reason: "non_retryable_status"}
 	}
+}
+
+func isImage2ChannelLocalStatus(code int) bool {
+	return code == 401 || code == 403 || code == 404 || (code >= 300 && code < 400)
 }
 
 func IsImageLikeRelay(relayMode int, modelName string) bool {

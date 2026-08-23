@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -124,6 +125,35 @@ func TestImageEditsEndpointHasDistinctSharedPath(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "/v1/images/edits", info.Path)
 	assert.Equal(t, http.MethodPost, info.Method)
+}
+
+func TestBuildImage2ChannelTestEvidenceBindsActualProbeBytes(t *testing.T) {
+	channel := &model.Channel{Id: 82}
+	capability := &dto.Image2ChannelCapability{
+		Enabled: true, Operations: []string{"generations", "edits"}, Resolutions: []string{"1024"},
+		MaxN: 1, EditsAccepted: true,
+	}
+	channel.SetSetting(dto.ChannelSettings{Image2Capability: capability})
+	testedAt := time.Date(2026, time.August, 23, 15, 0, 0, 0, time.UTC)
+	evidence, evidenceDigest, err := buildImage2ChannelTestEvidence(
+		channel,
+		constant.EndpointTypeImageEdits,
+		testedAt,
+		[]byte("exact multipart request bytes"),
+		[]byte("exact response bytes"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, evidence)
+	assert.Equal(t, channel.Id, evidence.ChannelID)
+	assert.Equal(t, "edits", evidence.Operation)
+	assert.Equal(t, "/v1/images/edits", evidence.Endpoint)
+	assert.Equal(t, 1, int(evidence.RequestCount))
+	assert.Equal(t, http.StatusOK, evidence.StatusCode)
+	assert.NotEmpty(t, evidence.RequestSHA256)
+	assert.NotEmpty(t, evidence.ResponseSHA256)
+	recomputed, err := dto.Image2FixedChannelTestEvidenceSHA256(*evidence)
+	require.NoError(t, err)
+	assert.Equal(t, recomputed, evidenceDigest)
 }
 
 func TestIsImageGenerationChannelTestModelDoesNotBroadenToVisionModels(t *testing.T) {

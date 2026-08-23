@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -132,6 +133,7 @@ func UpdateOption(c *gin.Context) {
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
 	}
+	beforeImage2SmartRouting := common.GetImage2SmartRoutingEnabled()
 	switch option.Key {
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && common.GitHubClientId == "" {
@@ -319,6 +321,19 @@ func UpdateOption(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if option.Key == common.Image2SmartRoutingOptionKey {
+		model.RecordLogWithAdminInfo(
+			c.GetInt("id"),
+			model.LogTypeManage,
+			fmt.Sprintf("Changed Image2 smart routing from %t to %t", beforeImage2SmartRouting, common.GetImage2SmartRoutingEnabled()),
+			map[string]interface{}{
+				"action": "image2.smart_routing.toggle",
+				"before": strconv.FormatBool(beforeImage2SmartRouting),
+				"after":  strconv.FormatBool(common.GetImage2SmartRoutingEnabled()),
+				"source": "database",
+			},
+		)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

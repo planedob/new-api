@@ -20,6 +20,8 @@ const OPERATIONS_SECTIONS = [
           DefaultCollapseSidebar: settings.DefaultCollapseSidebar,
           DemoSiteEnabled: settings.DemoSiteEnabled,
           SelfUseModeEnabled: settings.SelfUseModeEnabled,
+          'image2.smart_routing.enabled':
+            settings['image2.smart_routing.enabled'],
         }}
       />
     ),

@@ -135,16 +135,66 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayErrorStage = "content_validation"
 	var image2Router *service.Image2SmartRouter
+	var image2Capability *service.Image2RequestCapability
 	if imageRequest, ok := request.(*dto.ImageRequest); ok {
+		// Keep only the normalized Image2 request dimensions for optional passive
+		// monitoring. This does not select a channel or alter the legacy path.
+		if capability, capabilityErr := service.ParseImage2RequestCapability(relayInfo, imageRequest); capabilityErr == nil {
+			image2Capability = &capability
+			service.SetImage2PassiveRequestCapability(c, capability)
+		}
 		image2Router, err = service.NewImage2SmartRouter(c, relayInfo, imageRequest)
 		if err != nil {
-			// Smart routing is an opt-in optimization. Any capability parsing,
-			// group resolution, or candidate lookup failure must preserve the
-			// established selector instead of rejecting a valid client request.
+			if service.Image2SmartRoutingEnabled() {
+				// Enforced capability routing must fail closed when its request,
+				// group, or candidate state cannot be evaluated. Falling back to
+				// legacy here would send the request to an unverified channel.
+				logger.LogWarn(c, fmt.Sprintf("image2 smart routing enforce unavailable; rejecting request: %s", err.Error()))
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("image2 routing is temporarily unavailable"),
+					types.ErrorCodeGetChannelFailed,
+					http.StatusServiceUnavailable,
+					types.ErrOptionWithSkipRetry(),
+				)
+				return
+			}
+			// Observe mode and the default legacy path preserve the established
+			// selector when capability evaluation is unavailable.
 			logger.LogWarn(c, fmt.Sprintf("image2 smart routing unavailable; using legacy routing: %s", err.Error()))
 			image2Router = nil
 		}
 		if image2Router != nil {
+			if !image2Router.HasCandidates() {
+				// Reject before ModelPriceHelper/PreConsumeBilling. This avoids
+				// billing and refund churn for a request no declared channel can
+				// safely serve.
+				logger.LogWarn(c, fmt.Sprintf("image2 smart routing has no compatible candidate for model %s", relayInfo.OriginModelName))
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("no compatible Image2 channel is currently available"),
+					types.ErrorCodeGetChannelFailed,
+					http.StatusServiceUnavailable,
+					types.ErrOptionWithSkipRetry(),
+				)
+				if image2Capability != nil {
+					selectionGroup := relayInfo.UsingGroup
+					if selectionGroup == "" {
+						selectionGroup = relayInfo.TokenGroup
+					}
+					service.RecordRelayErrorLog(c, newAPIError, service.RelayErrorLogOptions{
+						Stage:          "channel_selection",
+						ModelName:      relayInfo.OriginModelName,
+						Group:          selectionGroup,
+						UpstreamCalled: false,
+						BillingState:   service.RelayErrorBillingNotStarted,
+						Charged:        common.GetPointer(false),
+						Image2:         image2Capability,
+						Extra: map[string]interface{}{
+							"image2_candidate_decisions": image2Router.DecisionSummary(),
+						},
+					})
+				}
+				return
+			}
 			c.Set("image2_smart_router_active", true)
 		}
 	}
@@ -224,6 +274,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; safeFailoverActive || retryParam.GetRetry() <= maxRetries; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		// Acceptance belongs to one upstream attempt. The corresponding image
+		// response handler sets it before reading or parsing a successful body.
+		relayInfo.UpstreamAccepted = false
 		relayErrorStage = "channel_selection"
 		relayErrorExtra = nil
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
@@ -273,6 +326,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.ObserveImage2Success(c, c.Writer.Status())
 			relayInfo.LastError = nil
 			return
 		}
@@ -398,6 +452,9 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 	if openaiErr == nil {
 		return false
 	}
+	if info.UpstreamAccepted {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -415,8 +472,10 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 			MaxAttempts:           common.SafeFailoverMaxAttempts,
 			RelayMode:             info.RelayMode,
 			ModelName:             info.OriginModelName,
+			Image2SmartRouting:    c.GetBool("image2_smart_router_active"),
 			IsStream:              info.IsStream,
 			ResponseWritten:       responseWritten,
+			UpstreamAccepted:      info.UpstreamAccepted,
 			ReceivedResponseCount: info.ReceivedResponseCount,
 			AttemptElapsed:        attemptElapsed,
 			ImageGuard:            time.Duration(common.SafeFailoverImageGuardSeconds) * time.Second,
@@ -469,6 +528,9 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	// Passive monitoring is strictly observational; it does not participate in
+	// retry decisions or channel health state.
+	service.ObserveImage2UpstreamError(c, err, channelError.ChannelId)
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {

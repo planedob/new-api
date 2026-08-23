@@ -144,6 +144,14 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
+	_ = RecordErrorLogWithResult(c, userId, channelId, modelName, tokenName, content, tokenId, useTimeSeconds, isStream, group, other)
+}
+
+// RecordErrorLogWithResult is the error-returning form used by structured
+// observability paths. The legacy RecordErrorLog API remains a best-effort
+// fire-and-forget wrapper for existing callers.
+func RecordErrorLogWithResult(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
+	isStream bool, group string, other map[string]interface{}) error {
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, content))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -184,6 +192,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
+	return err
 }
 
 type RecordConsumeLogParams struct {

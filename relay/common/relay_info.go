@@ -155,9 +155,13 @@ type RelayInfo struct {
 	IsChannelTest                         bool // channel test request
 	RetryIndex                            int
 	LastError                             *types.NewAPIError
-	RuntimeHeadersOverride                map[string]interface{}
-	UseRuntimeHeadersOverride             bool
-	ParamOverrideAudit                    []string
+	// UpstreamAccepted is scoped to the current upstream attempt. Image
+	// handlers set it as soon as a 2xx response arrives so later local body
+	// handling failures cannot make the request look safely replayable.
+	UpstreamAccepted          bool
+	RuntimeHeadersOverride    map[string]interface{}
+	UseRuntimeHeadersOverride bool
+	ParamOverrideAudit        []string
 
 	PriceData types.PriceData
 
