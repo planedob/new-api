@@ -83,10 +83,10 @@ func TestImage2UnknownRouteModeFailsClosedToLegacy(t *testing.T) {
 func TestImage2UnknownRouteModeCannotEnableSmartRouting(t *testing.T) {
 	oldEnabled := common.Image2SmartRoutingEnabled
 	oldMode := common.Image2RouteMode
-	common.SetImage2SmartRoutingEnabled(true)
+	common.Image2SmartRoutingEnabled = true
 	common.Image2RouteMode = "not-a-mode"
 	t.Cleanup(func() {
-		common.SetImage2SmartRoutingEnabled(oldEnabled)
+		common.Image2SmartRoutingEnabled = oldEnabled
 		common.Image2RouteMode = oldMode
 	})
 

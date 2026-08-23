@@ -260,6 +260,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; safeFailoverActive || retryParam.GetRetry() <= maxRetries; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		relayInfo.UpstreamAccepted = false
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -431,6 +432,9 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 	if openaiErr == nil {
 		return false
 	}
+	if info.UpstreamAccepted {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -450,6 +454,7 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 			ModelName:             info.OriginModelName,
 			IsStream:              info.IsStream,
 			ResponseWritten:       responseWritten,
+			UpstreamAccepted:      info.UpstreamAccepted,
 			ReceivedResponseCount: info.ReceivedResponseCount,
 			AttemptElapsed:        attemptElapsed,
 			ImageGuard:            time.Duration(common.SafeFailoverImageGuardSeconds) * time.Second,

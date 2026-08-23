@@ -561,6 +561,15 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
+	// A successful HTTP response means the upstream has accepted the attempt,
+	// even when local body parsing or image validation fails afterwards. Mark
+	// this before reading the body so Image2 failover cannot replay a request
+	// that may already have been charged or queued upstream.
+	if info != nil && service.IsImage2SmartRoute(info) && resp != nil &&
+		resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		info.UpstreamAccepted = true
+	}
+
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)

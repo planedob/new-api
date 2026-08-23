@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -141,6 +142,42 @@ func TestOpenaiHandlerWithUsageRejectsEmptyImageDataBeforeWritingResponse(t *tes
 	}
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("empty image response was written to client: %q", recorder.Body.String())
+	}
+}
+
+func TestOpenaiHandlerWithUsageMarksImage2AcceptedBeforeBodyValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("{invalid-json")),
+	}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		RelayMode:       relayconstant.RelayModeImagesGenerations,
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+	}
+
+	usage, apiErr := OpenaiHandlerWithUsage(context, info, response)
+	if usage != nil || apiErr == nil {
+		t.Fatalf("invalid accepted response = usage %#v, error %#v; want local parse error", usage, apiErr)
+	}
+	if !info.UpstreamAccepted {
+		t.Fatal("successful upstream status was not recorded before body validation")
+	}
+
+	decision := service.EvaluateSafeFailover(service.SafeFailoverInput{
+		RelayMode:        info.RelayMode,
+		ModelName:        info.OriginModelName,
+		UpstreamAccepted: info.UpstreamAccepted,
+		Error:            apiErr,
+	})
+	if decision.Retry {
+		t.Fatalf("accepted response was eligible for failover: %#v", decision)
+	}
+	if decision.Reason != "upstream_accepted" {
+		t.Fatalf("decision reason = %q, want upstream_accepted", decision.Reason)
 	}
 }
 
