@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +39,34 @@ func TestChannelTestRelayInfoCanAcceptUnpricedCandidateWithoutGlobalMutation(t *
 	assert.True(t, info.UserSetting.AcceptUnsetRatioModel)
 	assert.False(t, untouched.IsChannelTest)
 	assert.False(t, untouched.UserSetting.AcceptUnsetRatioModel)
+}
+
+func TestChannelTestUnpricedCandidateBypassesOnlySyntheticRelayInfo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupModelListControllerTestDB(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/test/82", nil)
+	ctx.Set("group", "default")
+
+	newInfo := func() *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			UserId:          1,
+			OriginModelName: "aibuff-channel-test-unpriced-candidate-prod-base",
+			UserGroup:       "default",
+			UsingGroup:      "default",
+		}
+	}
+	ordinaryInfo := newInfo()
+	_, err := relayhelper.ModelPriceHelper(ctx, ordinaryInfo, 0, &types.TokenCountMeta{})
+	require.Error(t, err)
+	require.ErrorContains(t, err, ordinaryInfo.OriginModelName)
+
+	testInfo := newInfo()
+	prepareChannelTestRelayInfo(testInfo)
+	priceData, err := relayhelper.ModelPriceHelper(ctx, testInfo, 0, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	assert.False(t, priceData.UsePrice)
+	assert.False(t, ordinaryInfo.UserSetting.AcceptUnsetRatioModel)
 }
 
 func TestNormalizeChannelTestEndpointReusesSharedChannelProtocol(t *testing.T) {
