@@ -98,6 +98,18 @@ func TestEvaluateSafeFailover(t *testing.T) {
 			reason: "upstream_accepted",
 		},
 		{
+			name: "structured upstream acceptance blocks local parse failure",
+			input: SafeFailoverInput{
+				MaxAttempts:        1,
+				RelayMode:          relayconstant.RelayModeImagesGenerations,
+				ModelName:          "gpt-image-2",
+				Image2SmartRouting: true,
+				UpstreamAccepted:   true,
+				Error:              makeErr(http.StatusInternalServerError, types.ErrorCodeBadResponseBody, "invalid character after top-level value"),
+			},
+			reason: "upstream_accepted",
+		},
+		{
 			name: "response bytes block switch",
 			input: SafeFailoverInput{
 				MaxAttempts:           1,

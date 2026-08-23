@@ -167,3 +167,41 @@ func TestOpenaiHandlerWithUsageAcceptsURLOrBase64ImageData(t *testing.T) {
 		})
 	}
 }
+
+type failingAcceptedImageBody struct{}
+
+func (failingAcceptedImageBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (failingAcceptedImageBody) Close() error             { return nil }
+
+func TestOpenaiImageAcceptedStatePrecedesBodyHandling(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body io.ReadCloser
+	}{
+		{name: "invalid JSON", body: io.NopCloser(strings.NewReader(`{invalid-json`))},
+		{name: "read failure", body: failingAcceptedImageBody{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			info := &relaycommon.RelayInfo{
+				RelayMode:       relayconstant.RelayModeImagesGenerations,
+				OriginModelName: "gpt-image-2",
+				ChannelMeta:     &relaycommon.ChannelMeta{},
+			}
+			response := &http.Response{StatusCode: http.StatusOK, Body: test.body}
+
+			usage, apiErr := OpenaiHandlerWithUsage(context, info, response)
+
+			if usage != nil || apiErr == nil {
+				t.Fatalf("accepted malformed response = usage %#v, error %#v; want local handling error", usage, apiErr)
+			}
+			if !info.UpstreamAccepted {
+				t.Fatal("2xx Image2 response was not marked accepted before local body handling")
+			}
+			if recorder.Body.Len() != 0 {
+				t.Fatalf("malformed response was written to client: %q", recorder.Body.String())
+			}
+		})
+	}
+}

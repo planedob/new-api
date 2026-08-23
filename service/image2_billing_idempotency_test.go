@@ -192,10 +192,22 @@ func TestImage2FailoverStopsWithoutReplayAndRefundsOnce(t *testing.T) {
 		name              string
 		status            int
 		body              string
+		errorStatus       int
+		errorCode         types.ErrorCode
+		upstreamAccepted  bool
 		requestContextErr error
 		responseCount     int
 		wantReason        string
 	}{
+		{
+			name:             "accepted 200 invalid JSON",
+			status:           http.StatusOK,
+			body:             `{invalid-json`,
+			errorStatus:      http.StatusInternalServerError,
+			errorCode:        types.ErrorCodeBadResponseBody,
+			upstreamAccepted: true,
+			wantReason:       "upstream_accepted",
+		},
 		{
 			name:       "accepted upstream task",
 			status:     http.StatusBadGateway,
@@ -236,15 +248,24 @@ func TestImage2FailoverStopsWithoutReplayAndRefundsOnce(t *testing.T) {
 			second := newImage2FakeUpstream(t, requestID, http.StatusOK, `{"created":1,"data":[{"b64_json":"bm90LXNlbGVjdGVk"}]}`)
 
 			status, body := image2DoFakeAttempt(t, first, requestID)
+			errorStatus := test.errorStatus
+			if errorStatus == 0 {
+				errorStatus = status
+			}
+			errorCode := test.errorCode
+			if errorCode == "" {
+				errorCode = types.ErrorCodeBadResponseStatusCode
+			}
 			decision := EvaluateSafeFailover(SafeFailoverInput{
 				RelayMode:             info.RelayMode,
 				ModelName:             info.OriginModelName,
+				UpstreamAccepted:      test.upstreamAccepted,
 				ReceivedResponseCount: test.responseCount,
 				RequestContextErr:     test.requestContextErr,
 				Error: types.NewErrorWithStatusCode(
 					fmt.Errorf("fake upstream status %d: %s", status, body),
-					types.ErrorCodeBadResponseStatusCode,
-					status,
+					errorCode,
+					errorStatus,
 				),
 			})
 			require.False(t, decision.Retry)

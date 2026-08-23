@@ -20,6 +20,7 @@ type SafeFailoverInput struct {
 	Image2SmartRouting    bool
 	IsStream              bool
 	ResponseWritten       bool
+	UpstreamAccepted      bool
 	ReceivedResponseCount int
 	AttemptElapsed        time.Duration
 	ImageGuard            time.Duration
@@ -47,6 +48,9 @@ func EvaluateSafeFailover(input SafeFailoverInput) SafeFailoverDecision {
 	}
 	if input.ResponseWritten || input.ReceivedResponseCount > 0 {
 		return SafeFailoverDecision{Reason: "response_started"}
+	}
+	if input.UpstreamAccepted {
+		return SafeFailoverDecision{Reason: "upstream_accepted"}
 	}
 	if types.IsSkipRetryError(input.Error) {
 		return SafeFailoverDecision{Reason: "skip_retry_error"}

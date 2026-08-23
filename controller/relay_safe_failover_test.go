@@ -119,6 +119,44 @@ func TestShouldRetrySafeModeContinuesLongImageServerFailure(t *testing.T) {
 	require.True(t, shouldRetry(c, info, upstreamErr, 1, 61*time.Second))
 }
 
+func TestShouldRetrySafeModeStopsAfterStructuredUpstreamAcceptance(t *testing.T) {
+	setupSafeFailoverTest(t)
+	c := safeFailoverContext()
+	c.Set("image2_smart_router_active", true)
+	info := &relaycommon.RelayInfo{
+		RetryIndex:       0,
+		RelayMode:        relayconstant.RelayModeImagesGenerations,
+		OriginModelName:  "gpt-image-2",
+		UpstreamAccepted: true,
+	}
+	parseErr := types.NewErrorWithStatusCode(
+		errors.New("invalid character after top-level value"),
+		types.ErrorCodeBadResponseBody,
+		http.StatusInternalServerError,
+	)
+
+	require.False(t, shouldRetry(c, info, parseErr, 1, time.Second))
+}
+
+func TestShouldRetryLegacyModeStopsAfterStructuredUpstreamAcceptance(t *testing.T) {
+	setupSafeFailoverTest(t)
+	common.SafeFailoverV1Enabled = false
+	c := safeFailoverContext()
+	info := &relaycommon.RelayInfo{
+		RetryIndex:       0,
+		RelayMode:        relayconstant.RelayModeImagesGenerations,
+		OriginModelName:  "gpt-image-2",
+		UpstreamAccepted: true,
+	}
+	parseErr := types.NewErrorWithStatusCode(
+		errors.New("invalid character after top-level value"),
+		types.ErrorCodeBadResponseBody,
+		http.StatusInternalServerError,
+	)
+
+	require.False(t, shouldRetry(c, info, parseErr, 1, time.Second))
+}
+
 func TestShouldRetryLegacyModePreservesChannelErrorBehavior(t *testing.T) {
 	setupSafeFailoverTest(t)
 	common.SafeFailoverV1Enabled = false
