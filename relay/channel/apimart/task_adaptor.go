@@ -39,11 +39,19 @@ var ChannelName = "apimart-image"
 // local public task id; APIMart's provider task id is returned separately to
 // the task persistence layer and never written to this response.
 type ImageJob struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	Model     string `json:"model,omitempty"`
-	Status    string `json:"status"`
-	CreatedAt int64  `json:"created_at"`
+	ID          string          `json:"id"`
+	Object      string          `json:"object"`
+	Model       string          `json:"model,omitempty"`
+	Status      string          `json:"status"`
+	CreatedAt   int64           `json:"created_at"`
+	CompletedAt int64           `json:"completed_at,omitempty"`
+	Data        []dto.ImageData `json:"data,omitempty"`
+	Error       *ImageJobError  `json:"error,omitempty"`
+}
+
+type ImageJobError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // imageJobSubmission is the small, provider-neutral task payload persisted in
@@ -261,7 +269,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if info != nil {
 		job.CreatedAt = info.StartTime.Unix()
 	}
-	if err := writeJSON(c, http.StatusOK, job); err != nil {
+	if err := writeJSON(c, http.StatusAccepted, job); err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "write_response_failed", http.StatusInternalServerError)
 	}
 	taskData, err = json.Marshal(imageJobSubmission{
@@ -307,6 +315,57 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy 
 func (a *TaskAdaptor) GetModelList() []string { return append([]string(nil), ModelList...) }
 
 func (a *TaskAdaptor) GetChannelName() string { return ChannelName }
+
+// ConvertToOpenAIImageTask renders the persisted task snapshot without making
+// another upstream request. Provider task identifiers and raw provider errors
+// are deliberately excluded from the public job object.
+func (a *TaskAdaptor) ConvertToOpenAIImageTask(task *model.Task) ([]byte, error) {
+	if task == nil {
+		return nil, fmt.Errorf("APIMart task is nil")
+	}
+	job := ImageJob{
+		ID:        task.TaskID,
+		Object:    "image_generation.job",
+		Model:     task.Properties.OriginModelName,
+		Status:    publicTaskStatus(task.Status),
+		CreatedAt: task.CreatedAt,
+	}
+	if job.Model == "" {
+		job.Model = ModelName
+	}
+	if task.Status == model.TaskStatusSuccess {
+		result, err := parseTaskResponse(task.Data)
+		if err != nil {
+			return nil, fmt.Errorf("parse completed APIMart task: %w", err)
+		}
+		response, err := NormalizeImageResponse(result, task.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		job.Data = response.Data
+		job.CompletedAt = task.FinishTime
+	}
+	if task.Status == model.TaskStatusFailure {
+		job.CompletedAt = task.FinishTime
+		job.Error = &ImageJobError{Code: "image_generation_failed", Message: "image generation failed"}
+	}
+	return json.Marshal(job)
+}
+
+func publicTaskStatus(status model.TaskStatus) string {
+	switch status {
+	case model.TaskStatusNotStart, model.TaskStatusSubmitted, model.TaskStatusQueued:
+		return "queued"
+	case model.TaskStatusInProgress:
+		return "processing"
+	case model.TaskStatusSuccess:
+		return "succeeded"
+	case model.TaskStatusFailure:
+		return "failed"
+	default:
+		return "queued"
+	}
+}
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	result, err := parseTaskResponse(respBody)
