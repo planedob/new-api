@@ -47,6 +47,18 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+func prepareChannelTestRelayInfo(info *relaycommon.RelayInfo) {
+	if info == nil {
+		return
+	}
+	info.IsChannelTest = true
+	// A fixed-channel administrator probe validates upstream reachability before
+	// the model is exposed or priced for customers. Keep this override scoped to
+	// the synthetic test RelayInfo so an unpriced candidate can be tested without
+	// changing the administrator account or the global pricing configuration.
+	info.UserSetting.AcceptUnsetRatioModel = true
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -318,7 +330,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		}
 	}
 
-	info.IsChannelTest = true
+	prepareChannelTestRelayInfo(info)
 	info.InitChannelMeta(c)
 
 	err = attachTestBillingRequestInput(info, request)

@@ -27,6 +27,19 @@ func TestNormalizeChannelTestEndpointInfersImage2Generation(t *testing.T) {
 	}
 }
 
+func TestChannelTestRelayInfoCanAcceptUnpricedCandidateWithoutGlobalMutation(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+	untouched := &relaycommon.RelayInfo{}
+
+	prepareChannelTestRelayInfo(nil)
+	prepareChannelTestRelayInfo(info)
+
+	assert.True(t, info.IsChannelTest)
+	assert.True(t, info.UserSetting.AcceptUnsetRatioModel)
+	assert.False(t, untouched.IsChannelTest)
+	assert.False(t, untouched.UserSetting.AcceptUnsetRatioModel)
+}
+
 func TestNormalizeChannelTestEndpointReusesSharedChannelProtocol(t *testing.T) {
 	for _, test := range []struct {
 		name        string
