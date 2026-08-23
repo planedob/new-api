@@ -318,7 +318,15 @@ func (a *TaskAdaptor) ConvertToOpenAIImageTask(task *model.Task) ([]byte, error)
 			return nil, err
 		}
 		public.ProductID = providerTask.ProductID
-		public.Status = providerTask.Status
+		// The durable task status is authoritative for billing outcomes.  In
+		// particular, a zero-success COMPLETED/PARTIAL_SUCCESS response is
+		// normalized to internal FAILURE and fully refunded by ParseTaskResult;
+		// do not let the provider status overwrite that public failure state.
+		if task.Status == model.TaskStatusFailure {
+			public.Status = StatusFailed
+		} else {
+			public.Status = providerTask.Status
+		}
 		public.Progress = providerTask.Progress
 		public.CompletedAt = task.FinishTime
 		if providerTask.CompletedAt > 0 {

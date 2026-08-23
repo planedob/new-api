@@ -2,6 +2,7 @@ package codefoxasync
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -353,6 +354,36 @@ func TestConvertToOpenAIImageTaskUsesPublicProxyAndHidesProviderDetails(t *testi
 	wantProxy := "https://aibuff.example/v1/images/batches/task_public_1/items/0/content"
 	if !strings.Contains(public, wantProxy) || !strings.Contains(public, `"status":"PARTIAL_SUCCESS"`) {
 		t.Fatalf("public response = %s", public)
+	}
+}
+
+func TestConvertToOpenAIImageTaskKeepsZeroSuccessTerminalFailure(t *testing.T) {
+	for _, providerStatus := range []string{"COMPLETED", "PARTIAL_SUCCESS"} {
+		t.Run(providerStatus, func(t *testing.T) {
+			providerBody := []byte(fmt.Sprintf(`{"success":true,"data":{"task_id":"provider-zero-success","status":"%s","progress":{"total":2,"success":0,"failed":2,"pending":0},"errors":[{"item_index":0,"error_code":"POLICY"},{"item_index":1,"error_code":"POLICY"}]}}`, providerStatus))
+			task := &model.Task{
+				TaskID:     "task_public_zero_success",
+				Status:     model.TaskStatusFailure,
+				CreatedAt:  1717920000,
+				FinishTime: 1717920180,
+				Data:       providerBody,
+			}
+
+			body, err := (&TaskAdaptor{}).ConvertToOpenAIImageTask(task)
+			if err != nil {
+				t.Fatalf("ConvertToOpenAIImageTask() error = %v", err)
+			}
+			var public PublicBatchTask
+			if err := common.Unmarshal(body, &public); err != nil {
+				t.Fatalf("decode public task: %v; body=%s", err, body)
+			}
+			if public.Status != StatusFailed {
+				t.Fatalf("public status = %q, want %q; body=%s", public.Status, StatusFailed, body)
+			}
+			if public.Status == Status(providerStatus) {
+				t.Fatalf("provider terminal status overwrote internal failure: %s", body)
+			}
+		})
 	}
 }
 

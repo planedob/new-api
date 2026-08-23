@@ -417,6 +417,20 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 }
 
 func imageTaskFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.TaskError) {
+	// The public task id namespace is shared by async providers, but the
+	// endpoint families are intentionally not interchangeable.  A CodeFox
+	// batch id must only be readable through /images/batches, while an APIMart
+	// job id must only be readable through the generations/jobs routes.  Keep
+	// the rejection indistinguishable from an unknown task so callers cannot
+	// use one route to probe another provider's task ids.
+	path := ""
+	if c != nil && c.Request != nil && c.Request.URL != nil {
+		path = c.Request.URL.Path
+	}
+	fetchRoute := imageTaskFetchRouteForPath(path)
+	if fetchRoute == imageTaskFetchRouteUnknown {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusNotFound)
+	}
 	taskID := c.Param("task_id")
 	if taskID == "" {
 		taskID = c.Param("id")
@@ -426,6 +440,9 @@ func imageTaskFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskRes
 		return nil, service.TaskErrorWrapper(err, "get_task_failed", http.StatusInternalServerError)
 	}
 	if !exist {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusNotFound)
+	}
+	if !imageTaskPlatformAllowed(fetchRoute, originTask.Platform) {
 		return nil, service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusNotFound)
 	}
 	adaptor := GetTaskAdaptor(originTask.Platform)
@@ -441,6 +458,38 @@ func imageTaskFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskRes
 		return nil, service.TaskErrorWrapper(err, "convert_to_openai_image_task_failed", http.StatusInternalServerError)
 	}
 	return respBody, nil
+}
+
+type imageTaskFetchRoute uint8
+
+const (
+	imageTaskFetchRouteUnknown imageTaskFetchRoute = iota
+	imageTaskFetchRouteAPIMart
+	imageTaskFetchRouteCodeFox
+)
+
+func imageTaskFetchRouteForPath(path string) imageTaskFetchRoute {
+	switch {
+	case strings.HasPrefix(path, "/v1/images/batches/"):
+		return imageTaskFetchRouteCodeFox
+	case strings.HasPrefix(path, "/v1/images/generations/jobs/"):
+		return imageTaskFetchRouteAPIMart
+	case strings.HasPrefix(path, "/pg/images/jobs/"):
+		return imageTaskFetchRouteAPIMart
+	default:
+		return imageTaskFetchRouteUnknown
+	}
+}
+
+func imageTaskPlatformAllowed(route imageTaskFetchRoute, platform constant.TaskPlatform) bool {
+	switch route {
+	case imageTaskFetchRouteAPIMart:
+		return platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeAPIMart))
+	case imageTaskFetchRouteCodeFox:
+		return platform == constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeCodeFoxAsync))
+	default:
+		return false
+	}
 }
 
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。
