@@ -379,7 +379,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}
 
-	logger.LogDebug(ctx, fmt.Sprintf("updateVideoSingleTask response: %s", string(responseBody)))
+	publicSafeResponseBody := redactProtectedTaskResponseBody(responseBody, ch.Type)
+	logger.LogDebug(ctx, fmt.Sprintf("updateVideoSingleTask response: %s", string(redactTaskResponseForLog(publicSafeResponseBody, ch.Type))))
 
 	snap := task.Snapshot()
 
@@ -399,7 +400,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 	}
 
-	task.Data = redactVideoResponseBody(responseBody)
+	task.Data = publicSafeResponseBody
 
 	logger.LogDebug(ctx, fmt.Sprintf("updateVideoSingleTask taskResult: %+v", taskResult))
 
@@ -549,6 +550,77 @@ func redactVideoResponseBody(body []byte) []byte {
 		return body
 	}
 	return b
+}
+
+func redactProtectedTaskResponseBody(body []byte, channelType int) []byte {
+	redacted := redactVideoResponseBody(body)
+	if channelType != constant.ChannelTypeAPIMart && channelType != constant.ChannelTypeCodeFoxAsync {
+		return redacted
+	}
+	var value any
+	if err := common.Unmarshal(redacted, &value); err != nil {
+		return []byte(`{"error":"upstream task response unavailable"}`)
+	}
+	redactAsyncImageValue(value)
+	result, err := common.Marshal(value)
+	if err != nil {
+		return []byte(`{"error":"upstream task response unavailable"}`)
+	}
+	return result
+}
+
+func redactTaskResponseForLog(body []byte, channelType int) []byte {
+	if channelType != constant.ChannelTypeAPIMart && channelType != constant.ChannelTypeCodeFoxAsync {
+		return body
+	}
+	var value any
+	if err := common.Unmarshal(body, &value); err != nil {
+		return []byte(`{"status":"unavailable"}`)
+	}
+	redactAsyncImageResultForLog(value)
+	result, err := common.Marshal(value)
+	if err != nil {
+		return []byte(`{"status":"unavailable"}`)
+	}
+	return result
+}
+
+func redactAsyncImageResultForLog(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			switch strings.ToLower(key) {
+			case "url", "image_url", "b64_json", "base64", "data_uri":
+				current[key] = "[redacted]"
+			default:
+				redactAsyncImageResultForLog(child)
+			}
+		}
+	case []any:
+		for _, child := range current {
+			redactAsyncImageResultForLog(child)
+		}
+	}
+}
+
+func redactAsyncImageValue(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			switch strings.ToLower(key) {
+			case "task_id", "id":
+				delete(current, key)
+			case "message", "error_message", "reason", "detail":
+				current[key] = "upstream task error"
+			default:
+				redactAsyncImageValue(child)
+			}
+		}
+	case []any:
+		for _, child := range current {
+			redactAsyncImageValue(child)
+		}
+	}
 }
 
 func truncateBase64(s string) string {

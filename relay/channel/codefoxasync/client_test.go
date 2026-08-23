@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -282,6 +283,9 @@ func TestTaskAdaptorUsesPublicIDAndMapsPartialBilling(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), "provider-task-1") || !strings.Contains(recorder.Body.String(), "task_public_1") {
 		t.Fatalf("public response leaked upstream id: %s", recorder.Body.String())
 	}
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d", recorder.Code, http.StatusAccepted)
+	}
 
 	partial := []byte(`{"success":true,"data":{"task_id":"provider-task-1","status":"PARTIAL_SUCCESS","progress":{"total":3,"success":2,"failed":1,"pending":0},"results":[{"item_index":0,"image_url":"https://provider.invalid/0"},{"item_index":1,"image_url":"https://provider.invalid/1"}],"errors":[{"item_index":2,"error_code":"CONTENT_POLICY_VIOLATION","error_message":"blocked"}]}}`)
 	result, err := adaptor.ParseTaskResult(partial)
@@ -294,6 +298,35 @@ func TestTaskAdaptorUsesPublicIDAndMapsPartialBilling(t *testing.T) {
 	quota := adaptor.AdjustBillingOnComplete(&model.Task{Quota: 300}, result)
 	if quota != 200 {
 		t.Fatalf("partial actual quota = %d, want 200", quota)
+	}
+}
+
+func TestConvertToOpenAIImageTaskUsesPublicProxyAndHidesProviderDetails(t *testing.T) {
+	oldServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://aibuff.example"
+	t.Cleanup(func() { system_setting.ServerAddress = oldServerAddress })
+
+	providerBody := []byte(`{"success":true,"data":{"task_id":"provider-secret-task","product_id":"sku-1","status":"PARTIAL_SUCCESS","progress":{"total":2,"success":1,"failed":1,"pending":0},"results":[{"item_index":0,"prompt":"front","image_url":"https://provider.invalid/secret.png","status":"SUCCESS"}],"errors":[{"item_index":1,"prompt":"bad","error_code":"CONTENT_POLICY_VIOLATION","error_message":"raw provider diagnostic"}],"created_at":1717920000,"completed_at":1717920180}}`)
+	task := &model.Task{
+		TaskID:     "task_public_1",
+		Status:     model.TaskStatusSuccess,
+		CreatedAt:  1717920000,
+		FinishTime: 1717920180,
+		Data:       providerBody,
+	}
+	body, err := (&TaskAdaptor{}).ConvertToOpenAIImageTask(task)
+	if err != nil {
+		t.Fatalf("ConvertToOpenAIImageTask() error = %v", err)
+	}
+	public := string(body)
+	for _, forbidden := range []string{"provider-secret-task", "provider.invalid", "raw provider diagnostic"} {
+		if strings.Contains(public, forbidden) {
+			t.Fatalf("public response leaked %q: %s", forbidden, public)
+		}
+	}
+	wantProxy := "https://aibuff.example/v1/images/batches/task_public_1/items/0/content"
+	if !strings.Contains(public, wantProxy) || !strings.Contains(public, `"status":"PARTIAL_SUCCESS"`) {
+		t.Fatalf("public response = %s", public)
 	}
 }
 
@@ -323,5 +356,42 @@ func TestTaskAdaptorFetchTaskIsReadOnlyAndUsesKeySnapshot(t *testing.T) {
 	}
 	if strings.Contains(string(body), key) {
 		t.Fatalf("FetchTask response leaked key: %s", body)
+	}
+}
+
+func TestTaskAdaptorNamespacesIdempotencyAndRejectsDirectCallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	makeContext := func(body string) *gin.Context {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/images/batches", strings.NewReader(body))
+		ctx.Request.Header.Set("Content-Type", "application/json")
+		return ctx
+	}
+
+	first := makeContext(`{"idempotency_key":"order-1","prompts":["one"]}`)
+	firstInfo := &relaycommon.RelayInfo{UserId: 11}
+	adaptor := &TaskAdaptor{}
+	if taskErr := adaptor.ValidateRequestAndSetAction(first, firstInfo); taskErr != nil {
+		t.Fatalf("first validation error = %v", taskErr)
+	}
+	firstRequest, err := requestFromContextOrBody(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := makeContext(`{"idempotency_key":"order-1","prompts":["one"]}`)
+	if taskErr := adaptor.ValidateRequestAndSetAction(second, &relaycommon.RelayInfo{UserId: 12}); taskErr != nil {
+		t.Fatalf("second validation error = %v", taskErr)
+	}
+	secondRequest, err := requestFromContextOrBody(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRequest.IdempotencyKey == "order-1" || firstRequest.IdempotencyKey == secondRequest.IdempotencyKey {
+		t.Fatalf("idempotency keys were not user-scoped: %q %q", firstRequest.IdempotencyKey, secondRequest.IdempotencyKey)
+	}
+
+	callback := makeContext(`{"prompts":["one"],"callback_url":"https://customer.example/webhook"}`)
+	if taskErr := adaptor.ValidateRequestAndSetAction(callback, &relaycommon.RelayInfo{UserId: 11}); taskErr == nil {
+		t.Fatal("direct callback_url unexpectedly accepted")
 	}
 }

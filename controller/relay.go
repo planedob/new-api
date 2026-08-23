@@ -739,7 +739,10 @@ func RelayTask(c *gin.Context) {
 			ModelRatio:      relayInfo.PriceData.ModelRatio,
 			OtherRatios:     relayInfo.PriceData.OtherRatios,
 			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+			// CodeFox native batches precharge per requested item and must settle
+			// partial success to the actual successful item count.
+			PerCallBilling: relayInfo.ChannelType != constant.ChannelTypeCodeFoxAsync &&
+				(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData

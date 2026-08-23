@@ -3,6 +3,7 @@ package codefoxasync
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -54,6 +56,16 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if err != nil {
 		return newTaskError(err, "invalid_codefox_batch_request", http.StatusBadRequest)
 	}
+	// Passing a customer callback directly upstream would expose the provider
+	// task id and produce a signature made with Aibuff's private upstream key.
+	// Polling is the supported public completion mechanism until Aibuff owns a
+	// verified webhook relay endpoint.
+	if normalized.CallbackURL != "" {
+		return newTaskError(fmt.Errorf("callback_url is not supported; poll the batch task instead"), "invalid_codefox_batch_request", http.StatusBadRequest)
+	}
+	if normalized.IdempotencyKey != "" && info != nil {
+		normalized.IdempotencyKey = namespaceIdempotencyKey(info.UserId, normalized.IdempotencyKey)
+	}
 	c.Set(batchRequestContextKey, normalized)
 	// The generic task plumbing expects a TaskSubmitReq to exist. Keep its
 	// first prompt as a compatibility projection; BuildRequestBody uses the
@@ -67,9 +79,17 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		},
 	})
 	if info != nil {
+		if info.TaskRelayInfo == nil {
+			info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+		}
 		info.Action = constant.TaskActionGenerate
 	}
 	return nil
+}
+
+func namespaceIdempotencyKey(userID int, customerKey string) string {
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s", userID, customerKey)))
+	return fmt.Sprintf("aibuff-%x", digest[:16])
 }
 
 // EstimateBilling returns the number of requested items as the n ratio. The
@@ -208,7 +228,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		publicTaskID = model.GenerateTaskID()
 	}
 	if c != nil {
-		c.JSON(http.StatusOK, PublicBatchSubmission{
+		c.JSON(http.StatusAccepted, PublicBatchSubmission{
 			ID:         publicTaskID,
 			TaskID:     publicTaskID,
 			Status:     status,
@@ -241,6 +261,115 @@ func chooseCreatedAt(value int64) int64 {
 func (a *TaskAdaptor) GetModelList() []string { return []string{DefaultModel} }
 
 func (a *TaskAdaptor) GetChannelName() string { return "codefoxasync" }
+
+type PublicBatchResult struct {
+	ItemIndex int    `json:"item_index"`
+	Prompt    string `json:"prompt,omitempty"`
+	ImageURL  string `json:"image_url"`
+	Status    string `json:"status"`
+}
+
+type PublicBatchError struct {
+	ItemIndex int    `json:"item_index"`
+	Prompt    string `json:"prompt,omitempty"`
+	ErrorCode string `json:"error_code"`
+	Message   string `json:"error_message"`
+}
+
+type PublicBatchTask struct {
+	ID          string              `json:"id"`
+	TaskID      string              `json:"task_id"`
+	Object      string              `json:"object"`
+	ProductID   string              `json:"product_id,omitempty"`
+	Status      Status              `json:"status"`
+	Progress    Progress            `json:"progress"`
+	Results     []PublicBatchResult `json:"results,omitempty"`
+	Errors      []PublicBatchError  `json:"errors,omitempty"`
+	CreatedAt   int64               `json:"created_at"`
+	CompletedAt int64               `json:"completed_at,omitempty"`
+}
+
+// ConvertToOpenAIImageTask renders only the persisted snapshot. It never
+// polls CodeFox and replaces every provider image URL with an authenticated
+// Aibuff content-proxy URL tied to the public task id.
+func (a *TaskAdaptor) ConvertToOpenAIImageTask(task *model.Task) ([]byte, error) {
+	if task == nil {
+		return nil, fmt.Errorf("CodeFox task is nil")
+	}
+	public := PublicBatchTask{
+		ID:        task.TaskID,
+		TaskID:    task.TaskID,
+		Object:    "image.batch",
+		Status:    publicBatchStatus(task.Status),
+		CreatedAt: task.CreatedAt,
+	}
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		providerTask, err := ParseBatchTaskResponse(task.Data)
+		if err != nil {
+			return nil, err
+		}
+		public.ProductID = providerTask.ProductID
+		public.Status = providerTask.Status
+		public.Progress = providerTask.Progress
+		public.CompletedAt = task.FinishTime
+		if providerTask.CompletedAt > 0 {
+			public.CompletedAt = providerTask.CompletedAt
+		}
+		for _, item := range providerTask.Results {
+			public.Results = append(public.Results, PublicBatchResult{
+				ItemIndex: item.ItemIndex,
+				Prompt:    item.Prompt,
+				ImageURL:  batchImageProxyURL(task.TaskID, item.ItemIndex),
+				Status:    "SUCCESS",
+			})
+		}
+		for _, item := range providerTask.Errors {
+			code := strings.TrimSpace(item.ErrorCode)
+			if code == "" {
+				code = "IMAGE_GENERATION_FAILED"
+			}
+			public.Errors = append(public.Errors, PublicBatchError{
+				ItemIndex: item.ItemIndex,
+				Prompt:    item.Prompt,
+				ErrorCode: code,
+				Message:   "image generation failed",
+			})
+		}
+	}
+	return common.Marshal(public)
+}
+
+func publicBatchStatus(status model.TaskStatus) Status {
+	switch status {
+	case model.TaskStatusInProgress:
+		return StatusProcessing
+	case model.TaskStatusSuccess:
+		return StatusCompleted
+	case model.TaskStatusFailure:
+		return StatusFailed
+	default:
+		return StatusPending
+	}
+}
+
+func batchImageProxyURL(publicTaskID string, itemIndex int) string {
+	return fmt.Sprintf("%s/v1/images/batches/%s/items/%d/content",
+		strings.TrimRight(system_setting.ServerAddress, "/"), publicTaskID, itemIndex)
+}
+
+// ParseBatchTaskResponse converts one persisted provider poll response into a
+// normalized task. The provider id remains internal and callers must replace
+// it before building public responses.
+func ParseBatchTaskResponse(respBody []byte) (BatchTask, error) {
+	var envelope taskEnvelope
+	if err := common.Unmarshal(respBody, &envelope); err != nil || !envelope.Success {
+		return BatchTask{}, fmt.Errorf("invalid CodeFox task response")
+	}
+	if strings.TrimSpace(envelope.Data.TaskID) == "" {
+		envelope.Data.TaskID = "redacted"
+	}
+	return normalizeTask(envelope.Data, "")
+}
 
 // FetchTask is a read-only provider GET. It uses the key snapshot supplied by
 // the persisted task so key rotation cannot redirect a historical task.

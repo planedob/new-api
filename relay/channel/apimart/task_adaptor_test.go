@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
@@ -45,6 +46,31 @@ func TestTaskAdaptorDoResponseReturnsOnlyPublicJobID(t *testing.T) {
 	}
 	if strings.Contains(string(taskData), "provider-secret-123") {
 		t.Fatalf("provider task id leaked in persisted task data: %s", taskData)
+	}
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d", recorder.Code, http.StatusAccepted)
+	}
+}
+
+func TestConvertToOpenAIImageTaskReturnsCompletedImagesWithoutProviderID(t *testing.T) {
+	task := &model.Task{
+		TaskID:     "task_public_123",
+		CreatedAt:  123,
+		FinishTime: 456,
+		Status:     model.TaskStatusSuccess,
+		Properties: model.Properties{OriginModelName: ModelName},
+		Data:       []byte(`{"data":{"status":"completed","task_id":"provider-secret-123","result":{"images":[{"url":"https://example.test/a.png"},{"b64_json":"ZmFrZQ=="}]}}}`),
+	}
+	body, err := (&TaskAdaptor{}).ConvertToOpenAIImageTask(task)
+	if err != nil {
+		t.Fatalf("ConvertToOpenAIImageTask() error = %v", err)
+	}
+	public := string(body)
+	if strings.Contains(public, "provider-secret-123") || !strings.Contains(public, "task_public_123") || !strings.Contains(public, `"status":"succeeded"`) {
+		t.Fatalf("public task response = %s", public)
+	}
+	if !strings.Contains(public, "https://example.test/a.png") || !strings.Contains(public, "ZmFrZQ==") {
+		t.Fatalf("completed images missing: %s", public)
 	}
 }
 
