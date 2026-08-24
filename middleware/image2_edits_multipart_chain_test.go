@@ -2,10 +2,13 @@ package middleware
 
 import (
 	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	relayhelper "github.com/QuantumNous/new-api/relay/helper"
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -137,6 +141,71 @@ func TestImage2EditsDistributeThenRelayReusesMultipartBody(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"prompt":"turn the image purple"`)
 }
 
+func TestImage2EditsMultipartContentTypeCaseVariantUsesSameChain(t *testing.T) {
+	request := image2EditsMultipartRequest(t, "/v1/images/edits")
+	request.Header.Set("Content-Type", strings.Replace(request.Header.Get("Content-Type"), "multipart/form-data", "Multipart/Form-Data", 1))
+	recorder := serveImage2EditsChain(t, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}
+
+func TestImage2EditsCompressedMultipartUsesSameChain(t *testing.T) {
+	for _, encoding := range []string{"gzip", "br"} {
+		t.Run(encoding, func(t *testing.T) {
+			original := image2EditsMultipartRequest(t, "/v1/images/edits")
+			contentType := original.Header.Get("Content-Type")
+			plain, err := io.ReadAll(original.Body)
+			require.NoError(t, err)
+			var encoded bytes.Buffer
+			switch encoding {
+			case "gzip":
+				writer := gzip.NewWriter(&encoded)
+				_, err = writer.Write(plain)
+				require.NoError(t, err)
+				require.NoError(t, writer.Close())
+			case "br":
+				writer := brotli.NewWriter(&encoded)
+				_, err = writer.Write(plain)
+				require.NoError(t, err)
+				require.NoError(t, writer.Close())
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(encoded.Bytes()))
+			request.Header.Set("Content-Type", contentType)
+			request.Header.Set("Content-Encoding", encoding)
+			recorder := serveImage2EditsChain(t, request)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		})
+	}
+}
+
+func TestBodyStorageCleanupRemovesMultipartSpillFileAfterHandler(t *testing.T) {
+	previousLimit := constant.MaxFileDownloadMB
+	constant.MaxFileDownloadMB = 1
+	t.Cleanup(func() { constant.MaxFileDownloadMB = previousLimit })
+
+	png := append([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, bytes.Repeat([]byte{0}, 2<<20)...)
+	request := image2EditsMultipartRequestWithFiles(t, "/v1/images/edits", "image", [][]byte{png}, nil)
+	var spillPath string
+	router := gin.New()
+	router.Use(BodyStorageCleanup())
+	router.POST("/v1/images/edits", func(c *gin.Context) {
+		form, err := common.ParseMultipartFormReusable(c)
+		require.NoError(t, err)
+		file, err := form.File["image"][0].Open()
+		require.NoError(t, err)
+		if diskFile, ok := file.(*os.File); ok {
+			spillPath = diskFile.Name()
+		}
+		require.NoError(t, file.Close())
+		c.Status(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.NotEmpty(t, spillPath, "multipart fixture must spill to disk")
+	_, err := os.Stat(spillPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestImage2EditsMultipartFieldAndImageVariantsUseSameChain(t *testing.T) {
 	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, '\r', 'I', 'H', 'D', 'R'}
 	jpeg := []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 'J', 'F', 'I', 'F', 0}
@@ -225,4 +294,7 @@ func TestImage2EditsMalformedRequestCreatesOneSafePreUpstreamLog(t *testing.T) {
 	require.Equal(t, "not_started", other["billing_state"])
 	require.Equal(t, true, other["charge_known"])
 	require.Equal(t, false, other["charged"])
+	require.Equal(t, common.Image2ValidationMissingBoundary, other["error_code"])
+	require.NotContains(t, rows[0].Content, "boundary not found")
+	require.NotContains(t, rows[0].Content, "unexpected EOF")
 }

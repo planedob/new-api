@@ -2,9 +2,11 @@ package common
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +38,64 @@ func reusableMultipartContext(t *testing.T) *gin.Context {
 		}
 	})
 	return context
+}
+
+func TestParseMultipartFormReusableAppendsEqualExistingValuesExactlyOnce(t *testing.T) {
+	context := reusableMultipartContext(t)
+	context.Request.PostForm = url.Values{"tag": {"first"}}
+	context.Request.Form = url.Values{"tag": {"first"}, "existing": {"kept"}}
+
+	first, err := ParseMultipartFormReusable(context)
+	require.NoError(t, err)
+	second, err := ParseMultipartFormReusable(context)
+	require.NoError(t, err)
+
+	require.Same(t, first, second)
+	require.Equal(t, []string{"first", "first", "first", "second"}, context.Request.PostForm["tag"])
+	require.Equal(t, []string{"first", "first", "first", "second"}, context.Request.Form["tag"])
+	require.Equal(t, []string{"kept"}, context.Request.Form["existing"])
+}
+
+func TestIsMultipartFormDataIsCaseInsensitive(t *testing.T) {
+	require.True(t, IsMultipartFormData("Multipart/Form-Data; Boundary=case-sensitive-value"))
+	require.True(t, IsMultipartFormData("MULTIPART/FORM-DATA"))
+	require.False(t, IsMultipartFormData("application/json"))
+}
+
+func TestCleanupBodyStorageClearsMultipartContentTypeState(t *testing.T) {
+	context := reusableMultipartContext(t)
+	_, err := ParseMultipartFormReusable(context)
+	require.NoError(t, err)
+	require.NotNil(t, context.Value(keyOriginalMultipartContentType))
+
+	CleanupBodyStorage(context)
+	require.Nil(t, context.Value(keyOriginalMultipartContentType))
+}
+
+func TestClassifyImage2RequestValidationErrorUsesStableSafeContracts(t *testing.T) {
+	tests := []struct {
+		err      error
+		wantCode string
+		wantHTTP int
+		unsafe   string
+	}{
+		{err: errBoundaryNotFound, wantCode: Image2ValidationMissingBoundary, wantHTTP: 400, unsafe: "boundary not found"},
+		{err: io.ErrUnexpectedEOF, wantCode: Image2ValidationTruncatedBody, wantHTTP: 400, unsafe: "unexpected EOF"},
+		{err: ErrRequestBodyUnavailable, wantCode: Image2ValidationBodyUnavailable, wantHTTP: 400},
+		{err: ErrImageInputRequired, wantCode: Image2ValidationMissingImage, wantHTTP: 400},
+		{err: ErrImageInputEmpty, wantCode: Image2ValidationEmptyImage, wantHTTP: 400},
+		{err: ErrImageInputUnsupported, wantCode: Image2ValidationUnsupported, wantHTTP: 400},
+		{err: ErrRequestBodyTooLarge, wantCode: Image2ValidationTooLarge, wantHTTP: 413},
+		{err: errors.New("parser detail must stay private"), wantCode: Image2ValidationMalformed, wantHTTP: 400, unsafe: "parser detail"},
+	}
+	for _, test := range tests {
+		code, message, statusCode := ClassifyImage2RequestValidationError(test.err)
+		require.Equal(t, test.wantCode, code)
+		require.Equal(t, test.wantHTTP, statusCode)
+		if test.unsafe != "" {
+			require.NotContains(t, message, test.unsafe)
+		}
+	}
 }
 
 func TestParseMultipartFormReusableIsIdempotentAndPreservesValues(t *testing.T) {

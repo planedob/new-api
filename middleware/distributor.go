@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,13 +35,9 @@ func Distribute() func(c *gin.Context) {
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
-			statusCode := http.StatusBadRequest
-			if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
-				statusCode = http.StatusRequestEntityTooLarge
-			}
-			message := i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()})
 			if isImageEditsPath(c.Request.URL.Path) {
-				abortWithOpenAiMessageAndRecord(c, statusCode, message, types.ErrorCodeInvalidRequest, service.RelayErrorLogOptions{
+				code, message, statusCode := common.ClassifyImage2RequestValidationError(err)
+				abortWithOpenAiMessageAndRecord(c, statusCode, message, types.ErrorCode(code), service.RelayErrorLogOptions{
 					Stage:          "request_validation",
 					UpstreamCalled: false,
 					BillingState:   service.RelayErrorBillingNotStarted,
@@ -50,6 +45,11 @@ func Distribute() func(c *gin.Context) {
 					Image2:         &service.Image2RequestCapability{Operation: "edits"},
 				})
 			} else {
+				statusCode := http.StatusBadRequest
+				if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+					statusCode = http.StatusRequestEntityTooLarge
+				}
+				message := i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()})
 				abortWithOpenAiMessage(c, statusCode, message, types.ErrorCodeInvalidRequest)
 			}
 			return
@@ -265,7 +265,7 @@ func Distribute() func(c *gin.Context) {
 // - multipart/form-data
 func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	var modelRequest ModelRequest
-	if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+	if common.IsMultipartFormData(c.Request.Header.Get("Content-Type")) {
 		form, err := common.ParseMultipartFormReusable(c)
 		if err != nil {
 			return nil, err
@@ -318,7 +318,7 @@ func getPlaygroundGroup(c *gin.Context) (string, error) {
 	if !isPlaygroundPath(c.Request.URL.Path) {
 		return "", nil
 	}
-	if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+	if common.IsMultipartFormData(c.Request.Header.Get("Content-Type")) {
 		form, err := common.ParseMultipartFormReusable(c)
 		if err != nil {
 			return "", err
@@ -440,7 +440,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			modelRequest.Model = modelName
 		}
 		c.Set("relay_mode", relayMode)
-	} else if !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+	} else if !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !common.IsMultipartFormData(c.Request.Header.Get("Content-Type")) {
 		req, err := getModelFromRequest(c)
 		if err != nil {
 			return nil, false, err
@@ -465,8 +465,8 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "dall-e")
 	} else if isImageEditsPath(c.Request.URL.Path) {
 		//modelRequest.Model = common.GetStringIfEmpty(c.PostForm("model"), "gpt-image-1")
-		contentType := c.ContentType()
-		if slices.Contains([]string{gin.MIMEPOSTForm, gin.MIMEMultipartPOSTForm}, contentType) {
+		contentType := c.Request.Header.Get("Content-Type")
+		if common.IsMultipartFormData(contentType) || strings.EqualFold(strings.TrimSpace(c.ContentType()), gin.MIMEPOSTForm) {
 			req, err := getModelFromRequest(c)
 			if err != nil {
 				return nil, false, err

@@ -7,14 +7,15 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	projectmiddleware "github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -51,9 +52,10 @@ func TestRelayImage2MalformedMultipartFails400BeforeUpstream(t *testing.T) {
 		name        string
 		contentType string
 		body        []byte
+		wantCode    types.ErrorCode
 	}{
-		{name: "missing-boundary", contentType: "multipart/form-data", body: []byte("not-a-form")},
-		{name: "truncated-body", contentType: "multipart/form-data; boundary=cut", body: []byte("--cut\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-2\r\n--cut\r\nContent-Disposition: form-data; name=\"image\"; filename=\"x.png\"\r\nContent-Type: image/png\r\n\r\n\x89PNG")},
+		{name: "missing-boundary", contentType: "multipart/form-data", body: []byte("not-a-form"), wantCode: types.ErrorCodeImageEditMissingBoundary},
+		{name: "truncated-body", contentType: "multipart/form-data; boundary=cut", body: []byte("--cut\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-image-2\r\n--cut\r\nContent-Disposition: form-data; name=\"image\"; filename=\"x.png\"\r\nContent-Type: image/png\r\n\r\n\x89PNG"), wantCode: types.ErrorCodeImageEditTruncatedBody},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -61,7 +63,10 @@ func TestRelayImage2MalformedMultipartFails400BeforeUpstream(t *testing.T) {
 			request.Header.Set("Content-Type", test.contentType)
 			recorder := relayImage2ValidationResponse(t, request)
 			require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
-			require.Equal(t, string(types.ErrorCodeInvalidRequest), responseErrorCode(t, recorder))
+			require.Equal(t, string(test.wantCode), responseErrorCode(t, recorder))
+			require.NotContains(t, strings.ToLower(recorder.Body.String()), "unexpected eof")
+			require.NotContains(t, strings.ToLower(recorder.Body.String()), "nextpart")
+			require.NotContains(t, strings.ToLower(recorder.Body.String()), "boundary not found")
 		})
 	}
 }
@@ -84,11 +89,17 @@ func TestRelayImage2OversizedInputFails413BeforeUpstream(t *testing.T) {
 
 	recorder := relayImage2ValidationResponse(t, request)
 	require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code, recorder.Body.String())
-	require.Equal(t, string(types.ErrorCodeReadRequestBodyFailed), responseErrorCode(t, recorder))
+	require.Equal(t, string(types.ErrorCodeImageEditRequestTooLarge), responseErrorCode(t, recorder))
 }
 
 func TestRelayImage2EditsFullChainCallsFakeUpstreamAndBillsOnce(t *testing.T) {
 	db := openSecureSkillControllerIntegrationDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&model.EntitlementPackage{},
+		&model.UserEntitlement{},
+		&model.TokenEntitlement{},
+		&model.EntitlementDailyUsage{},
+	))
 	oldPrices := ratio_setting.ModelPrice2JSONString()
 	prices := ratio_setting.GetModelPriceMap()
 	prices["gpt-image-2"] = 0.001
@@ -143,44 +154,36 @@ func TestRelayImage2EditsFullChainCallsFakeUpstreamAndBillsOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body.Bytes()))
-	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
 	requestID := "image2-edits-full-chain-isolated"
-	context.Set(common.RequestIdKey, requestID)
-	common.SetContextKey(context, constant.ContextKeyUserId, userID)
-	common.SetContextKey(context, constant.ContextKeyUserQuota, initialUserQuota)
-	common.SetContextKey(context, constant.ContextKeyUserGroup, "default")
-	common.SetContextKey(context, constant.ContextKeyUsingGroup, "default")
-	common.SetContextKey(context, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
-	common.SetContextKey(context, constant.ContextKeyTokenId, tokenID)
-	common.SetContextKey(context, constant.ContextKeyTokenKey, "isolated-image2-token")
-	common.SetContextKey(context, constant.ContextKeyTokenGroup, "default")
-	common.SetContextKey(context, constant.ContextKeyTokenUnlimited, false)
-	common.SetContextKey(context, constant.ContextKeyOriginalModel, "gpt-image-2")
-	common.SetContextKey(context, constant.ContextKeyChannelId, channelID)
-	common.SetContextKey(context, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
-	common.SetContextKey(context, constant.ContextKeyChannelName, "image2-edits-full-chain-fake")
-	common.SetContextKey(context, constant.ContextKeyChannelKey, "isolated-upstream-key")
-	common.SetContextKey(context, constant.ContextKeyChannelBaseUrl, baseURL)
-	common.SetContextKey(context, constant.ContextKeyChannelSetting, dto.ChannelSettings{})
-	common.SetContextKey(context, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{})
-	common.SetContextKey(context, constant.ContextKeyChannelParamOverride, map[string]interface{}{})
-	common.SetContextKey(context, constant.ContextKeyChannelHeaderOverride, map[string]interface{}{})
-	common.SetContextKey(context, constant.ContextKeyChannelIsMultiKey, false)
-	common.SetContextKey(context, constant.ContextKeyChannelAutoBan, false)
-	common.SetContextKey(context, constant.ContextKeyChannelStatusCodeMapping, "")
-	common.SetContextKey(context, constant.ContextKeyRequestStartTime, time.Now())
-	context.Set("auto_ban", false)
-	context.Set("token_name", "image2-edits-integration-token")
-	context.Set("use_channel", []string{})
-
-	Relay(context, types.RelayFormatOpenAIImage)
-	common.CleanupBodyStorage(context)
-	if context.Request.MultipartForm != nil {
-		_ = context.Request.MultipartForm.RemoveAll()
-	}
+	var context *gin.Context
+	router := gin.New()
+	router.Use(projectmiddleware.DecompressRequestMiddleware())
+	router.Use(projectmiddleware.BodyStorageCleanup())
+	router.POST("/v1/images/edits", func(c *gin.Context) {
+		context = c
+		c.Set(common.RequestIdKey, requestID)
+		common.SetContextKey(c, constant.ContextKeyUserId, userID)
+		common.SetContextKey(c, constant.ContextKeyUserQuota, initialUserQuota)
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
+		common.SetContextKey(c, constant.ContextKeyTokenId, tokenID)
+		common.SetContextKey(c, constant.ContextKeyTokenKey, "isolated-image2-token")
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, "default")
+		common.SetContextKey(c, constant.ContextKeyTokenUnlimited, false)
+		common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "4703")
+		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		c.Set("auto_ban", false)
+		c.Set("token_name", "image2-edits-integration-token")
+		c.Set("use_channel", []string{})
+		c.Next()
+	}, projectmiddleware.Distribute(), func(c *gin.Context) {
+		Relay(c, types.RelayFormatOpenAIImage)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body.Bytes()))
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Equal(t, 1, upstreamCalls)
 	require.Contains(t, recorder.Body.String(), `"b64_json":"aGVsbG8="`)
@@ -198,5 +201,5 @@ func TestRelayImage2EditsFullChainCallsFakeUpstreamAndBillsOnce(t *testing.T) {
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ? and request_id = ?", model.LogTypeConsume, requestID).Count(&consumeCount).Error)
 	require.Equal(t, int64(1), consumeCount)
 
-	service.CleanupFileSources(context)
+	require.NotNil(t, context)
 }
