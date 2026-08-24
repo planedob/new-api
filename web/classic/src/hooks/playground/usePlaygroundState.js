@@ -33,6 +33,7 @@ import {
   saveMessages,
 } from '../../components/playground/configStorage';
 import { processIncompleteThinkTags } from '../../helpers';
+import { createLatestInputStore } from '../../helpers/playgroundRequestState';
 
 export const usePlaygroundState = () => {
   const { t } = useTranslation();
@@ -65,6 +66,9 @@ export const usePlaygroundState = () => {
   // 基础配置状态
   const [inputs, setInputs] = useState(
     savedConfig.inputs || DEFAULT_CONFIG.inputs,
+  );
+  const latestInputStoreRef = useRef(
+    createLatestInputStore(savedConfig.inputs || DEFAULT_CONFIG.inputs),
   );
   const [parameterEnabled, setParameterEnabled] = useState(
     savedConfig.parameterEnabled || DEFAULT_CONFIG.parameterEnabled,
@@ -121,8 +125,14 @@ export const usePlaygroundState = () => {
 
   // 配置更新函数
   const handleInputChange = useCallback((name, value) => {
-    setInputs((prev) => ({ ...prev, [name]: value }));
+    const nextInputs = latestInputStoreRef.current.update(name, value);
+    setInputs(nextInputs);
   }, []);
+
+  const getInputsSnapshot = useCallback(
+    () => latestInputStoreRef.current.get(),
+    [],
+  );
 
   const handleParameterToggle = useCallback((paramName) => {
     setParameterEnabled((prev) => ({
@@ -168,13 +178,17 @@ export const usePlaygroundState = () => {
   const handleConfigImport = useCallback((importedConfig) => {
     if (importedConfig.inputs) {
       const parsedMaxTokens = parseInt(importedConfig.inputs.max_tokens, 10);
-      setInputs((prev) => ({
-        ...prev,
-        ...importedConfig.inputs,
-        max_tokens: Number.isNaN(parsedMaxTokens)
-          ? importedConfig.inputs.max_tokens
-          : parsedMaxTokens,
-      }));
+      setInputs((prev) => {
+        const nextInputs = {
+          ...prev,
+          ...importedConfig.inputs,
+          max_tokens: Number.isNaN(parsedMaxTokens)
+            ? importedConfig.inputs.max_tokens
+            : parsedMaxTokens,
+        };
+        latestInputStoreRef.current.replace(nextInputs);
+        return nextInputs;
+      });
     }
     if (importedConfig.parameterEnabled) {
       setParameterEnabled((prev) => ({
@@ -200,6 +214,7 @@ export const usePlaygroundState = () => {
   const handleConfigReset = useCallback((options = {}) => {
     const { resetMessages = false } = options;
 
+    latestInputStoreRef.current.replace(DEFAULT_CONFIG.inputs);
     setInputs(DEFAULT_CONFIG.inputs);
     setParameterEnabled(DEFAULT_CONFIG.parameterEnabled);
     setShowDebugPanel(DEFAULT_CONFIG.showDebugPanel);
@@ -304,6 +319,7 @@ export const usePlaygroundState = () => {
 
     // 处理函数
     handleInputChange,
+    getInputsSnapshot,
     handleParameterToggle,
     debouncedSaveConfig,
     saveMessagesImmediately,

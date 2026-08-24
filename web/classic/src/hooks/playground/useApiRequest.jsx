@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SSE } from 'sse.js';
 import {
@@ -31,6 +31,7 @@ import {
   processThinkTags,
   processIncompleteThinkTags,
 } from '../../helpers';
+import { createRequestAbortRegistry } from '../../helpers/playgroundRequestState';
 
 const getImageResponseContent = (data) => {
   if (!Array.isArray(data?.data)) return '';
@@ -66,6 +67,7 @@ export const useApiRequest = (
   saveMessages,
 ) => {
   const { t } = useTranslation();
+  const requestAbortRegistryRef = useRef(createRequestAbortRegistry());
 
   // 处理消息自动关闭逻辑的公共函数
   const applyAutoCollapseLogic = useCallback(
@@ -217,6 +219,7 @@ export const useApiRequest = (
         isStreaming: false,
       }));
       setActiveDebugTab(DEBUG_TABS.REQUEST);
+      const abortController = requestAbortRegistryRef.current.begin();
 
       try {
         const headers = {
@@ -230,6 +233,7 @@ export const useApiRequest = (
           method: 'POST',
           headers,
           body: isMultipart ? payload : JSON.stringify(payload),
+          signal: abortController.signal,
         });
 
         if (!response.ok) {
@@ -330,6 +334,17 @@ export const useApiRequest = (
           });
         }
       } catch (error) {
+        if (error?.name === 'AbortError') {
+          setDebugData((prev) => ({
+            ...prev,
+            response: JSON.stringify(
+              { cancelled: true, timestamp: new Date().toISOString() },
+              null,
+              2,
+            ),
+          }));
+          return;
+        }
         console.error('Non-stream request error:', error);
 
         const errorInfo = handleApiError(error);
@@ -355,6 +370,8 @@ export const useApiRequest = (
           }
           return newMessages;
         });
+      } finally {
+        requestAbortRegistryRef.current.clear(abortController);
       }
     },
     [
@@ -568,6 +585,7 @@ export const useApiRequest = (
       sseSourceRef.current.close();
       sseSourceRef.current = null;
     }
+    requestAbortRegistryRef.current.abort();
 
     // 无论是否存在 SSE 连接，都尝试处理最后一条正在生成的消息
     setMessage((prevMessage) => {

@@ -51,6 +51,7 @@ import {
   buildImagePayload,
   isGptImage2Model,
   encodeToBase64,
+  getEnabledImageSources,
 } from '../../helpers';
 
 // Components
@@ -145,6 +146,7 @@ const Playground = () => {
     sseSourceRef,
     chatRef,
     handleInputChange,
+    getInputsSnapshot,
     handleParameterToggle,
     debouncedSaveConfig,
     saveMessagesImmediately,
@@ -298,6 +300,10 @@ const Playground = () => {
 
   // 发送消息
   async function onMessageSend(content, attachment) {
+    // Semi Chat may retain an older callback instance. Always take one
+    // immutable snapshot from the synchronously updated input store so a
+    // freshly pasted image cannot fall back to the generation endpoint.
+    const requestInputs = getInputsSnapshot();
     // 创建用户消息和加载消息
     const userMessage = createMessage(MESSAGE_ROLES.USER, content);
     const loadingMessage = createLoadingAssistantMessage();
@@ -312,7 +318,7 @@ const Playground = () => {
         // Keep this path fail-closed so it cannot bypass the native image
         // generation/edit dispatch below.
         if (
-          isGptImage2Model(inputs.model) ||
+          isGptImage2Model(requestInputs.model) ||
           isGptImage2Model(customPayload.model)
         ) {
           Toast.error(
@@ -343,20 +349,25 @@ const Playground = () => {
     }
 
     // Image2 使用原生图片端点；香蕉系列继续使用兼容的聊天端点。
-    const validImageUrls = (inputs.imageEnabled ? inputs.imageUrls : []).filter(
-      (url) => String(url).trim() !== '',
+    const attachedFile =
+      typeof File !== 'undefined' && attachment instanceof File
+        ? attachment
+        : null;
+    const imageSources = getEnabledImageSources(requestInputs, attachedFile);
+    const validImageUrls = imageSources.filter(
+      (source) => typeof source === 'string',
     );
     const messageContent = buildMessageContent(
       content,
       validImageUrls,
-      inputs.imageEnabled,
+      requestInputs.imageEnabled,
     );
     const userMessageWithImages = createMessage(
       MESSAGE_ROLES.USER,
       messageContent,
     );
 
-    if (isGptImage2Model(inputs.model)) {
+    if (isGptImage2Model(requestInputs.model)) {
       const messagesWithLoading = [userMessageWithImages, loadingMessage];
       setMessage((prevMessage) => {
         const newMessages = [...prevMessage, ...messagesWithLoading];
@@ -365,26 +376,23 @@ const Playground = () => {
       });
 
       try {
-        const attachedFile =
-          typeof File !== 'undefined' && attachment instanceof File
-            ? attachment
-            : null;
-        const sources = validImageUrls.length
-          ? validImageUrls
-          : attachedFile
-            ? [attachedFile]
-            : [];
-        if (sources.length > 0) {
+        if (imageSources.length > 0) {
           const imageFiles = await Promise.all(
-            sources.map((source, index) => imageSourceToFile(source, index)),
+            imageSources.map((source, index) =>
+              imageSourceToFile(source, index),
+            ),
           );
-          const formData = buildImageEditFormData(inputs, content, imageFiles);
+          const formData = buildImageEditFormData(
+            requestInputs,
+            content,
+            imageFiles,
+          );
           sendRequest(formData, false, {
             endpoint: API_ENDPOINTS.IMAGE_EDITS,
             responseType: 'image',
           });
         } else {
-          const payload = buildImagePayload(inputs, content);
+          const payload = buildImagePayload(requestInputs, content);
           sendRequest(payload, false, {
             endpoint: API_ENDPOINTS.IMAGE_GENERATIONS,
             responseType: 'image',
@@ -408,7 +416,7 @@ const Playground = () => {
         });
       }
 
-      if (inputs.imageEnabled) {
+      if (requestInputs.imageEnabled) {
         setTimeout(() => handleInputChange('imageEnabled', false), 100);
       }
       return;
@@ -422,13 +430,13 @@ const Playground = () => {
       const payload = buildApiPayload(
         newMessages,
         null,
-        inputs,
+        requestInputs,
         parameterEnabled,
       );
-      sendRequest(payload, inputs.stream);
+      sendRequest(payload, requestInputs.stream);
 
       // 禁用图片模式
-      if (inputs.imageEnabled) {
+      if (requestInputs.imageEnabled) {
         setTimeout(() => {
           handleInputChange('imageEnabled', false);
         }, 100);

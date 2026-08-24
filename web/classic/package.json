@@ -46,6 +46,7 @@
     "build": "vite build",
     "lint": "prettier . --check",
     "lint:fix": "prettier . --write",
+    "test:playground-image2": "node --test src/helpers/playgroundRequestState.test.mjs",
     "eslint": "bunx eslint \"**/*.{js,jsx}\" --cache",
     "eslint:fix": "bunx eslint \"**/*.{js,jsx}\" --fix --cache",
     "preview": "vite preview",
