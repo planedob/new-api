@@ -3,10 +3,11 @@ package dto
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 type ChannelSettings struct {
@@ -55,12 +56,31 @@ type Image2CapabilityProfile struct {
 }
 
 type Image2CapabilityVerification struct {
-	Status           string   `json:"status"`
-	Source           string   `json:"source"`
-	VerifiedAt       string   `json:"verified_at"`
-	ValidUntil       string   `json:"valid_until"`
-	CapabilitySHA256 string   `json:"capability_sha256"`
-	EvidenceSHA256   []string `json:"evidence_sha256"`
+	Status           string                           `json:"status"`
+	Source           string                           `json:"source"`
+	VerifiedAt       string                           `json:"verified_at"`
+	ValidUntil       string                           `json:"valid_until"`
+	CapabilitySHA256 string                           `json:"capability_sha256"`
+	Evidence         []Image2FixedChannelTestEvidence `json:"evidence"`
+	EvidenceSHA256   []string                         `json:"evidence_sha256"`
+}
+
+// Image2FixedChannelTestEvidence is the non-sensitive, immutable envelope for
+// one fixed-channel probe. Request and response bodies never enter channel
+// settings; only their hashes are retained. The digest list above must match
+// the canonical envelopes exactly, so an arbitrary 64-character value cannot
+// make a channel routable.
+type Image2FixedChannelTestEvidence struct {
+	ChannelID        int    `json:"channel_id"`
+	Operation        string `json:"operation"`
+	Endpoint         string `json:"endpoint"`
+	TestedAt         string `json:"tested_at"`
+	Status           string `json:"status"`
+	StatusCode       int    `json:"status_code"`
+	RequestCount     uint   `json:"request_count"`
+	RequestSHA256    string `json:"request_sha256"`
+	ResponseSHA256   string `json:"response_sha256"`
+	CapabilitySHA256 string `json:"capability_sha256"`
 }
 
 func (verification *Image2CapabilityVerification) Validate() error {
@@ -92,8 +112,11 @@ func (verification *Image2CapabilityVerification) Validate() error {
 	if len(verification.EvidenceSHA256) == 0 {
 		return fmt.Errorf("image2_capability_verification.evidence_sha256 is required")
 	}
+	if len(verification.Evidence) != len(verification.EvidenceSHA256) {
+		return fmt.Errorf("image2_capability_verification.evidence must match evidence_sha256")
+	}
 	seen := make(map[string]struct{}, len(verification.EvidenceSHA256))
-	for _, digest := range verification.EvidenceSHA256 {
+	for index, digest := range verification.EvidenceSHA256 {
 		digest = strings.TrimSpace(digest)
 		if !validSHA256(digest) {
 			return fmt.Errorf("image2_capability_verification.evidence_sha256 contains an invalid digest")
@@ -101,9 +124,79 @@ func (verification *Image2CapabilityVerification) Validate() error {
 		if _, duplicate := seen[digest]; duplicate {
 			return fmt.Errorf("image2_capability_verification.evidence_sha256 contains a duplicate digest")
 		}
+		evidence := verification.Evidence[index]
+		if err := evidence.Validate(); err != nil {
+			return fmt.Errorf("image2_capability_verification.evidence[%d]: %w", index, err)
+		}
+		evidenceAt, _ := time.Parse(time.RFC3339, evidence.TestedAt)
+		if evidenceAt.After(verifiedAt) || verifiedAt.Sub(evidenceAt) > 15*time.Minute {
+			return fmt.Errorf("image2_capability_verification.evidence[%d].tested_at is not current", index)
+		}
+		expectedDigest, err := Image2FixedChannelTestEvidenceSHA256(evidence)
+		if err != nil || expectedDigest != digest {
+			return fmt.Errorf("image2_capability_verification.evidence_sha256 does not match evidence[%d]", index)
+		}
 		seen[digest] = struct{}{}
 	}
 	return nil
+}
+
+func (evidence Image2FixedChannelTestEvidence) Validate() error {
+	if evidence.ChannelID <= 0 {
+		return fmt.Errorf("channel_id must be positive")
+	}
+	operation := strings.ToLower(strings.TrimSpace(evidence.Operation))
+	expectedEndpoint := ""
+	switch operation {
+	case "generations":
+		expectedEndpoint = "/v1/images/generations"
+	case "edits":
+		expectedEndpoint = "/v1/images/edits"
+	default:
+		return fmt.Errorf("operation is unsupported")
+	}
+	if strings.TrimSpace(evidence.Endpoint) != expectedEndpoint {
+		return fmt.Errorf("endpoint does not match operation")
+	}
+	if _, err := time.Parse(time.RFC3339, evidence.TestedAt); err != nil {
+		return fmt.Errorf("tested_at must be RFC3339")
+	}
+	if strings.ToLower(strings.TrimSpace(evidence.Status)) != "passed" {
+		return fmt.Errorf("status must be passed")
+	}
+	if evidence.StatusCode != 200 {
+		return fmt.Errorf("status_code must be 200")
+	}
+	if evidence.RequestCount != 1 {
+		return fmt.Errorf("request_count must be 1")
+	}
+	if !validSHA256(evidence.RequestSHA256) || !validSHA256(evidence.ResponseSHA256) {
+		return fmt.Errorf("request_sha256 and response_sha256 must be valid")
+	}
+	if !validSHA256(evidence.CapabilitySHA256) {
+		return fmt.Errorf("capability_sha256 is invalid")
+	}
+	return nil
+}
+
+func Image2FixedChannelTestEvidenceSHA256(evidence Image2FixedChannelTestEvidence) (string, error) {
+	evidence.Operation = strings.ToLower(strings.TrimSpace(evidence.Operation))
+	evidence.Endpoint = strings.TrimSpace(evidence.Endpoint)
+	evidence.Status = strings.ToLower(strings.TrimSpace(evidence.Status))
+	evidence.RequestSHA256 = strings.TrimSpace(evidence.RequestSHA256)
+	evidence.ResponseSHA256 = strings.TrimSpace(evidence.ResponseSHA256)
+	evidence.CapabilitySHA256 = strings.TrimSpace(evidence.CapabilitySHA256)
+	testedAt, err := time.Parse(time.RFC3339, evidence.TestedAt)
+	if err != nil {
+		return "", err
+	}
+	evidence.TestedAt = testedAt.UTC().Format(time.RFC3339)
+	encoded, err := common.Marshal(evidence)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func validSHA256(digest string) bool {
@@ -113,7 +206,7 @@ func validSHA256(digest string) bool {
 }
 
 func Image2CapabilitySHA256(capability *Image2ChannelCapability) (string, error) {
-	encoded, err := json.Marshal(capability)
+	encoded, err := common.Marshal(capability)
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +216,7 @@ func Image2CapabilitySHA256(capability *Image2ChannelCapability) (string, error)
 
 // RoutingReason is empty only when current passed evidence is bound to the
 // exact capability declaration.
-func (verification *Image2CapabilityVerification) RoutingReason(now time.Time, capability *Image2ChannelCapability) string {
+func (verification *Image2CapabilityVerification) RoutingReason(now time.Time, channelID int, capability *Image2ChannelCapability) string {
 	if verification == nil {
 		return "image2_verification_missing"
 	}
@@ -151,6 +244,18 @@ func (verification *Image2CapabilityVerification) RoutingReason(now time.Time, c
 	capabilityDigest, err := Image2CapabilitySHA256(capability)
 	if err != nil || capabilityDigest != strings.TrimSpace(verification.CapabilitySHA256) {
 		return "image2_verification_capability_mismatch"
+	}
+	coveredOperations := make(map[string]struct{}, len(verification.Evidence))
+	for _, evidence := range verification.Evidence {
+		if evidence.ChannelID != channelID || strings.TrimSpace(evidence.CapabilitySHA256) != capabilityDigest {
+			return "image2_verification_evidence_mismatch"
+		}
+		coveredOperations[strings.ToLower(strings.TrimSpace(evidence.Operation))] = struct{}{}
+	}
+	for _, operation := range capability.Operations {
+		if _, ok := coveredOperations[strings.ToLower(strings.TrimSpace(operation))]; !ok {
+			return "image2_verification_operation_unproven"
+		}
 	}
 	return ""
 }

@@ -274,7 +274,7 @@ func newImage2SmartRouter(req Image2RequestCapability, channels []*model.Channel
 			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: "image2_capability_not_enabled"})
 			continue
 		}
-		if reason := setting.Image2CapabilityVerification.RoutingReason(now, capability); reason != "" {
+		if reason := setting.Image2CapabilityVerification.RoutingReason(now, channel.Id, capability); reason != "" {
 			router.decisions = append(router.decisions, Image2CandidateDecision{ChannelID: channel.Id, Reason: reason})
 			continue
 		}

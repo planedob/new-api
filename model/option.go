@@ -191,13 +191,18 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
-	// Reset to the environment fallback before replaying persisted options so
-	// deleting the database row cannot leave stale routing state in memory.
-	common.SetImage2SmartRoutingEnabled(common.Image2SmartRoutingEnvEnabled)
+	// Database-backed routing is fail-closed while the persisted state is being
+	// loaded. A transient read failure must never resurrect an environment=true
+	// fallback after an operator has switched the persisted option to false.
+	common.SetImage2SmartRoutingEnabled(false)
 	common.OptionMapRWMutex.Lock()
-	common.OptionMap[common.Image2SmartRoutingOptionKey] = strconv.FormatBool(common.Image2SmartRoutingEnvEnabled)
+	common.OptionMap[common.Image2SmartRoutingOptionKey] = strconv.FormatBool(false)
 	common.OptionMapRWMutex.Unlock()
-	options, _ := AllOption()
+	options, err := AllOption()
+	if err != nil {
+		common.SysLog("failed to load options from database: " + err.Error())
+		return
+	}
 	dbValue := ""
 	dbPresent := false
 	for _, option := range options {

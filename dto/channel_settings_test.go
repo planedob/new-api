@@ -99,18 +99,33 @@ func TestImage2CapabilityVerificationBindsCurrentEvidence(t *testing.T) {
 	now := time.Date(2026, time.August, 23, 1, 0, 0, 0, time.UTC)
 	digest, err := Image2CapabilitySHA256(capability)
 	require.NoError(t, err)
+	testedAt := now.Add(-time.Hour)
+	evidence := Image2FixedChannelTestEvidence{
+		ChannelID: 42, Operation: "generations", Endpoint: "/v1/images/generations",
+		TestedAt: testedAt.Format(time.RFC3339), Status: "passed", StatusCode: 200, RequestCount: 1,
+		RequestSHA256:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		ResponseSHA256:   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		CapabilitySHA256: digest,
+	}
+	evidenceDigest, err := Image2FixedChannelTestEvidenceSHA256(evidence)
+	require.NoError(t, err)
 	verification := &Image2CapabilityVerification{
 		Status: "passed", Source: "fixed_channel_test",
-		VerifiedAt: now.Add(-time.Hour).Format(time.RFC3339), ValidUntil: now.Add(time.Hour).Format(time.RFC3339),
+		VerifiedAt: testedAt.Format(time.RFC3339), ValidUntil: now.Add(time.Hour).Format(time.RFC3339),
 		CapabilitySHA256: digest,
-		EvidenceSHA256:   []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+		Evidence:         []Image2FixedChannelTestEvidence{evidence},
+		EvidenceSHA256:   []string{evidenceDigest},
 	}
 	require.NoError(t, verification.Validate())
-	assert.Empty(t, verification.RoutingReason(now, capability))
+	assert.Empty(t, verification.RoutingReason(now, 42, capability))
 
 	changed := *capability
 	changed.MaxN = 2
-	assert.Equal(t, "image2_verification_capability_mismatch", verification.RoutingReason(now, &changed))
+	assert.Equal(t, "image2_verification_capability_mismatch", verification.RoutingReason(now, 42, &changed))
+	assert.Equal(t, "image2_verification_evidence_mismatch", verification.RoutingReason(now, 43, capability))
+	verification.EvidenceSHA256[0] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	require.ErrorContains(t, verification.Validate(), "does not match evidence")
+	verification.EvidenceSHA256[0] = evidenceDigest
 	verification.ValidUntil = now.Format(time.RFC3339)
-	assert.Equal(t, "image2_verification_expired", verification.RoutingReason(now, capability))
+	assert.Equal(t, "image2_verification_expired", verification.RoutingReason(now, 42, capability))
 }

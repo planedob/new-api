@@ -82,15 +82,26 @@ func TestImage2ControllerNoCandidateFailsBeforeUpstreamAndBilling(t *testing.T) 
 	capabilityDigest, err := dto.Image2CapabilitySHA256(capability)
 	require.NoError(t, err)
 	verificationNow := time.Now().UTC().Truncate(time.Second)
+	testedAt := verificationNow.Add(-time.Hour)
+	evidence := dto.Image2FixedChannelTestEvidence{
+		ChannelID: channel.Id, Operation: "generations", Endpoint: "/v1/images/generations",
+		TestedAt: testedAt.Format(time.RFC3339), Status: "passed", StatusCode: 200, RequestCount: 1,
+		RequestSHA256:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		ResponseSHA256:   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		CapabilitySHA256: capabilityDigest,
+	}
+	evidenceDigest, err := dto.Image2FixedChannelTestEvidenceSHA256(evidence)
+	require.NoError(t, err)
 	channel.SetSetting(dto.ChannelSettings{
 		Image2Capability: capability,
 		Image2CapabilityVerification: &dto.Image2CapabilityVerification{
 			Status:           "passed",
 			Source:           "fixed_channel_test",
-			VerifiedAt:       verificationNow.Add(-time.Hour).Format(time.RFC3339),
+			VerifiedAt:       testedAt.Format(time.RFC3339),
 			ValidUntil:       verificationNow.Add(time.Hour).Format(time.RFC3339),
 			CapabilitySHA256: capabilityDigest,
-			EvidenceSHA256:   []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+			Evidence:         []dto.Image2FixedChannelTestEvidence{evidence},
+			EvidenceSHA256:   []string{evidenceDigest},
 		},
 	})
 	require.NoError(t, db.Create(channel).Error)

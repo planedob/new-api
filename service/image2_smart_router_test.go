@@ -22,7 +22,7 @@ func image2TestChannel(id, priority int, operations, resolutions []string, edits
 		Enabled: true, Operations: operations, Resolutions: resolutions, EditsAccepted: editsAccepted, MaxN: 4, RoutePriority: priority,
 	}
 	setting := dto.ChannelSettings{Image2Capability: capability}
-	setImage2TestVerification(&setting)
+	setImage2TestVerification(&setting, id)
 	channel := &model.Channel{Id: id}
 	channel.SetSetting(setting)
 	if channel.GetSetting().Image2Capability == nil {
@@ -31,19 +31,51 @@ func image2TestChannel(id, priority int, operations, resolutions []string, edits
 	return channel
 }
 
-func setImage2TestVerification(setting *dto.ChannelSettings) {
+func setImage2TestVerification(setting *dto.ChannelSettings, channelID int) {
 	digest, err := dto.Image2CapabilitySHA256(setting.Image2Capability)
 	if err != nil {
 		panic(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
-	setting.Image2CapabilityVerification = &dto.Image2CapabilityVerification{
+	verification := &dto.Image2CapabilityVerification{
 		Status:           "passed",
 		Source:           "fixed_channel_test",
 		VerifiedAt:       now.Add(-time.Hour).Format(time.RFC3339),
 		ValidUntil:       now.Add(time.Hour).Format(time.RFC3339),
 		CapabilitySHA256: digest,
-		EvidenceSHA256:   []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+	}
+	for _, operation := range setting.Image2Capability.Operations {
+		endpoint := "/v1/images/generations"
+		if operation == "edits" {
+			endpoint = "/v1/images/edits"
+		}
+		evidence := dto.Image2FixedChannelTestEvidence{
+			ChannelID: channelID, Operation: operation, Endpoint: endpoint,
+			TestedAt: verification.VerifiedAt, Status: "passed", StatusCode: 200, RequestCount: 1,
+			RequestSHA256:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			ResponseSHA256:   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+			CapabilitySHA256: digest,
+		}
+		evidenceDigest, digestErr := dto.Image2FixedChannelTestEvidenceSHA256(evidence)
+		if digestErr != nil {
+			panic(digestErr)
+		}
+		verification.Evidence = append(verification.Evidence, evidence)
+		verification.EvidenceSHA256 = append(verification.EvidenceSHA256, evidenceDigest)
+	}
+	setting.Image2CapabilityVerification = verification
+}
+
+func refreshImage2TestEvidenceDigests(setting *dto.ChannelSettings) {
+	verification := setting.Image2CapabilityVerification
+	verification.EvidenceSHA256 = verification.EvidenceSHA256[:0]
+	for index := range verification.Evidence {
+		verification.Evidence[index].TestedAt = verification.VerifiedAt
+		digest, err := dto.Image2FixedChannelTestEvidenceSHA256(verification.Evidence[index])
+		if err != nil {
+			panic(err)
+		}
+		verification.EvidenceSHA256 = append(verification.EvidenceSHA256, digest)
 	}
 }
 
@@ -241,12 +273,14 @@ func TestImage2SmartRouterRejectsFailedExpiredAndFutureVerification(t *testing.T
 	expiredSetting := expired.GetSetting()
 	expiredSetting.Image2CapabilityVerification.VerifiedAt = now.Add(-2 * time.Hour).Format(time.RFC3339)
 	expiredSetting.Image2CapabilityVerification.ValidUntil = now.Add(-time.Hour).Format(time.RFC3339)
+	refreshImage2TestEvidenceDigests(&expiredSetting)
 	expired.SetSetting(expiredSetting)
 
 	future := image2TestChannel(75, 30, []string{"generations"}, []string{"1024"}, false)
 	futureSetting := future.GetSetting()
 	futureSetting.Image2CapabilityVerification.VerifiedAt = now.Add(time.Hour).Format(time.RFC3339)
 	futureSetting.Image2CapabilityVerification.ValidUntil = now.Add(2 * time.Hour).Format(time.RFC3339)
+	refreshImage2TestEvidenceDigests(&futureSetting)
 	future.SetSetting(futureSetting)
 
 	router := newImage2SmartRouter(Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1}, []*model.Channel{failed, expired, future})
@@ -263,7 +297,7 @@ func TestImage2SmartRouterProfilesDoNotInventUnverifiedSizeQualityCombination(t 
 	setting.Image2Capability.Profiles = []dto.Image2CapabilityProfile{
 		{Operation: "generations", Resolution: "2048", Size: "2048x2048", Quality: "high", MaxN: 1},
 	}
-	setImage2TestVerification(&setting)
+	setImage2TestVerification(&setting, channel.Id)
 	channel.SetSetting(setting)
 
 	supported := newImage2SmartRouter(Image2RequestCapability{
@@ -346,7 +380,7 @@ func TestImage2SmartRouterQualityFiltering(t *testing.T) {
 	channel := image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false)
 	setting := channel.GetSetting()
 	setting.Image2Capability.Qualities = []string{"standard", "high"}
-	setImage2TestVerification(&setting)
+	setImage2TestVerification(&setting, channel.Id)
 	channel.SetSetting(setting)
 
 	t.Run("omitted quality uses provider default", func(t *testing.T) {
@@ -377,7 +411,7 @@ func TestImage2SmartRouterQualityFiltering(t *testing.T) {
 	t.Run("explicit quality is not inferred from an empty declaration", func(t *testing.T) {
 		setting := channel.GetSetting()
 		setting.Image2Capability.Qualities = nil
-		setImage2TestVerification(&setting)
+		setImage2TestVerification(&setting, channel.Id)
 		channel.SetSetting(setting)
 		router := newImage2SmartRouter(Image2RequestCapability{
 			Operation:  "generations",
@@ -394,7 +428,7 @@ func TestImage2SmartRouterQualityFiltering(t *testing.T) {
 	t.Run("quantity above max n is rejected", func(t *testing.T) {
 		setting := channel.GetSetting()
 		setting.Image2Capability.MaxN = 1
-		setImage2TestVerification(&setting)
+		setImage2TestVerification(&setting, channel.Id)
 		channel.SetSetting(setting)
 		router := newImage2SmartRouter(Image2RequestCapability{
 			Operation:  "generations",

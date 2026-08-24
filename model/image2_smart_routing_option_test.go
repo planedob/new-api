@@ -59,3 +59,26 @@ func TestLoadOptionsImage2SmartRoutingDatabaseOverridesEnvironment(t *testing.T)
 	loadOptionsFromDatabase()
 	assert.False(t, common.GetImage2SmartRoutingEnabled(), "malformed database value must fail closed")
 }
+
+func TestLoadOptionsImage2SmartRoutingDatabaseReadFailureFailsClosed(t *testing.T) {
+	originalDB := DB
+	originalEnabled := common.GetImage2SmartRoutingEnabled()
+	originalEnv := common.Image2SmartRoutingEnvEnabled
+	originalOptions := common.OptionMap
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db // Deliberately do not migrate Option, so AllOption returns an error.
+	common.OptionMap = map[string]string{}
+	common.Image2SmartRoutingEnvEnabled = true
+	common.SetImage2SmartRoutingEnabled(true)
+	t.Cleanup(func() {
+		DB = originalDB
+		common.Image2SmartRoutingEnvEnabled = originalEnv
+		common.SetImage2SmartRoutingEnabled(originalEnabled)
+		common.OptionMap = originalOptions
+	})
+
+	loadOptionsFromDatabase()
+	assert.False(t, common.GetImage2SmartRoutingEnabled(), "database read failure must disable routing")
+	assert.Equal(t, "false", common.OptionMap[common.Image2SmartRoutingOptionKey])
+}
