@@ -51,17 +51,31 @@ func TestBuildRequestBodyConvertsMultipartImagesAndUsesFixedModel(t *testing.T) 
 	if err := common.Unmarshal(bodyBytes, &got); err != nil {
 		t.Fatalf("unmarshal request body: %v", err)
 	}
+	var wire map[string]interface{}
+	if err := common.Unmarshal(bodyBytes, &wire); err != nil {
+		t.Fatalf("unmarshal request wire body: %v", err)
+	}
+	for _, field := range []string{"image_urls", "duration"} {
+		if _, exists := wire[field]; exists {
+			t.Fatalf("upstream request must not contain legacy field %q: %s", field, bodyBytes)
+		}
+	}
+	for _, field := range []string{"images", "seconds"} {
+		if _, exists := wire[field]; !exists {
+			t.Fatalf("upstream request must contain ZZone field %q: %s", field, bodyBytes)
+		}
+	}
 	if got.Model != ModelName {
 		t.Fatalf("model = %q, want %q", got.Model, ModelName)
 	}
 	if got.Prompt != "make the subject move naturally" {
 		t.Fatalf("prompt = %q", got.Prompt)
 	}
-	if got.Duration != minDuration {
-		t.Fatalf("duration = %d, want %d", got.Duration, minDuration)
+	if got.Seconds != minDuration {
+		t.Fatalf("seconds = %d, want %d", got.Seconds, minDuration)
 	}
-	if len(got.ImageURLs) != 1 || !strings.HasPrefix(got.ImageURLs[0], "data:image/png;base64,") {
-		t.Fatalf("image_urls = %#v", got.ImageURLs)
+	if len(got.Images) != 1 || !strings.HasPrefix(got.Images[0], "data:image/png;base64,") {
+		t.Fatalf("images = %#v", got.Images)
 	}
 }
 
@@ -151,8 +165,8 @@ func TestDurationDecimalJSONIsNotSilentlyDefaulted(t *testing.T) {
 	if err := common.Unmarshal(readAll(t, body), &got); err != nil {
 		t.Fatalf("decode upstream body: %v", err)
 	}
-	if got.Duration != 8 {
-		t.Fatalf("duration = %d, want 8 (JSON 8.0 must not silently become default 5)", got.Duration)
+	if got.Seconds != 8 {
+		t.Fatalf("seconds = %d, want 8 (JSON 8.0 must not silently become default 5)", got.Seconds)
 	}
 }
 
@@ -172,8 +186,8 @@ func TestDurationUpperBoundary15IsAcceptedAndForwarded(t *testing.T) {
 	if err := common.Unmarshal(readAll(t, body), &got); err != nil {
 		t.Fatalf("decode upstream body: %v", err)
 	}
-	if got.Duration != maxDuration {
-		t.Fatalf("duration = %d, want %d", got.Duration, maxDuration)
+	if got.Seconds != maxDuration {
+		t.Fatalf("seconds = %d, want %d", got.Seconds, maxDuration)
 	}
 }
 
@@ -326,7 +340,7 @@ func TestFakeUpstreamCreateAndReadOnlyPollingLifecycle(t *testing.T) {
 			if err := common.Unmarshal(payload, &request); err != nil {
 				t.Errorf("fake upstream request decode: %v", err)
 			}
-			if request.Model != ModelName || len(request.ImageURLs) != 1 {
+			if request.Model != ModelName || len(request.Images) != 1 || request.Seconds != minDuration {
 				t.Errorf("unexpected create payload: %+v", request)
 			}
 			w.Header().Set("Content-Type", "application/json")

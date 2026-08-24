@@ -80,10 +80,10 @@ var unsupportedFieldNames = map[string]string{
 }
 
 type requestPayload struct {
-	Model     string   `json:"model"`
-	Prompt    string   `json:"prompt"`
-	ImageURLs []string `json:"image_urls"`
-	Duration  int      `json:"duration"`
+	Model   string   `json:"model"`
+	Prompt  string   `json:"prompt"`
+	Images  []string `json:"images"`
+	Seconds int      `json:"seconds"`
 }
 
 type responseTask struct {
@@ -187,10 +187,10 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, _ *relaycommon.RelayInfo)
 		return nil, err
 	}
 	body := requestPayload{
-		Model:     ModelName,
-		Prompt:    req.Prompt,
-		ImageURLs: req.Images,
-		Duration:  req.Duration,
+		Model:   ModelName,
+		Prompt:  req.Prompt,
+		Images:  req.Images,
+		Seconds: req.Duration,
 	}
 	data, err := common.Marshal(body)
 	if err != nil {
