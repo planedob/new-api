@@ -79,6 +79,47 @@ func TestBuildRequestBodyConvertsMultipartImagesAndUsesFixedModel(t *testing.T) 
 	}
 }
 
+func TestBuildRequestBodyKeepsSecureSkillAndZZoneWireContractsIsolated(t *testing.T) {
+	tests := []struct {
+		name      string
+		channel   int
+		want      []string
+		forbidden []string
+	}{
+		{name: "zzone", channel: constant.ChannelTypeSecureSkill, want: []string{"images", "seconds"}, forbidden: []string{"image_urls", "duration"}},
+		{name: "secureskill_native", channel: constant.ChannelTypeSecureSkillNativeH3, want: []string{"image_urls", "duration"}, forbidden: []string{"images", "seconds"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := jsonContext(`{"model":"minimax-h3","prompt":"move","images":["https://example.test/input.png"],"duration":5}`)
+			info := testInfoForType("https://upstream.invalid", tt.channel)
+			adaptor := &TaskAdaptor{}
+			adaptor.Init(info)
+			if taskErr := adaptor.ValidateRequestAndSetAction(ctx, info); taskErr != nil {
+				t.Fatalf("ValidateRequestAndSetAction() error = %v", taskErr)
+			}
+			body, err := adaptor.BuildRequestBody(ctx, info)
+			if err != nil {
+				t.Fatalf("BuildRequestBody() error = %v", err)
+			}
+			var wire map[string]interface{}
+			if err := common.Unmarshal(readAll(t, body), &wire); err != nil {
+				t.Fatalf("unmarshal wire body: %v", err)
+			}
+			for _, field := range tt.want {
+				if _, ok := wire[field]; !ok {
+					t.Fatalf("missing %q in %#v", field, wire)
+				}
+			}
+			for _, field := range tt.forbidden {
+				if _, ok := wire[field]; ok {
+					t.Fatalf("forbidden %q in %#v", field, wire)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateRequestFailsClosedBeforeUpstreamForUnsupportedH3Inputs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -596,9 +637,13 @@ func httptestContext() *gin.Context {
 }
 
 func testInfo(baseURL string) *relaycommon.RelayInfo {
+	return testInfoForType(baseURL, constant.ChannelTypeSecureSkill)
+}
+
+func testInfoForType(baseURL string, channelType int) *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelType:       constant.ChannelTypeSecureSkill,
+			ChannelType:       channelType,
 			ChannelBaseUrl:    baseURL,
 			ApiKey:            "test-key",
 			UpstreamModelName: ModelName,

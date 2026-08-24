@@ -110,7 +110,7 @@ func VideoProxy(c *gin.Context) {
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:
 		videoURL = fmt.Sprintf("%s/v1/videos/%s/content", baseURL, task.GetUpstreamTaskID())
 		req.Header.Set("Authorization", "Bearer "+channel.Key)
-	case constant.ChannelTypeSecureSkill:
+	case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3:
 		configuredBaseURL := channel.GetBaseURL()
 		if strings.TrimSpace(configuredBaseURL) == "" {
 			videoProxyError(c, http.StatusBadGateway, "server_error", "SecureSkill base URL is not configured")

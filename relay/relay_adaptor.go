@@ -162,7 +162,7 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 			return &taskGemini.TaskAdaptor{}
 		case constant.ChannelTypeMiniMax:
 			return &hailuo.TaskAdaptor{}
-		case constant.ChannelTypeSecureSkill:
+		case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3:
 			return &secureskill.TaskAdaptor{}
 		case constant.ChannelTypeAPIMart:
 			return &apimart.TaskAdaptor{}

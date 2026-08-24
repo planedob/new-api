@@ -55,15 +55,17 @@ const (
 	ChannelTypeSora           = 55
 	ChannelTypeReplicate      = 56
 	ChannelTypeCodex          = 57
-	// SecureSkill exposes the MiniMax H3 OpenAI-compatible async video API.
-	// It is intentionally separate from ChannelTypeMiniMax, whose existing
-	// adapter targets the legacy Hailuo contract.
+	// Type 58 is retained for the existing ZZone MiniMax H3 channel.
 	ChannelTypeSecureSkill = 58
 	// APIMart and CodeFoxAsync intentionally use distinct task channel types.
-	// APIMart historically used 58; that value now belongs to SecureSkill H3.
+	// APIMart historically used 58; that value is retained by ZZone H3.
 	ChannelTypeAPIMart      = 59
 	ChannelTypeCodeFoxAsync = 60
-	ChannelTypeDummy        // this one is only for count, do not add any channel after this
+	// SecureSkillNativeH3 uses SecureSkill's current image_urls/duration wire
+	// contract. Type 58 is retained for the existing ZZone images/seconds
+	// channel so the two upstream protocols cannot be mixed accidentally.
+	ChannelTypeSecureSkillNativeH3 = 61
+	ChannelTypeDummy               // this one is only for count, do not add any channel after this
 
 )
 
@@ -126,69 +128,71 @@ var ChannelBaseURLs = []string{
 	"https://api.openai.com",                    //55
 	"https://api.replicate.com",                 //56
 	"https://chatgpt.com",                       //57
-	"",                                          //58 SecureSkill (must be configured explicitly)
+	"",                                          //58 ZZoneH3 (must be configured explicitly)
 	"",                                          //59 APIMart (must be configured explicitly)
 	"",                                          //60 CodeFoxAsync (must be configured explicitly)
+	"",                                          //61 SecureSkillNativeH3 (must be configured explicitly)
 }
 
 var ChannelTypeNames = map[int]string{
-	ChannelTypeUnknown:        "Unknown",
-	ChannelTypeOpenAI:         "OpenAI",
-	ChannelTypeMidjourney:     "Midjourney",
-	ChannelTypeAzure:          "Azure",
-	ChannelTypeOllama:         "Ollama",
-	ChannelTypeMidjourneyPlus: "MidjourneyPlus",
-	ChannelTypeOpenAIMax:      "OpenAIMax",
-	ChannelTypeOhMyGPT:        "OhMyGPT",
-	ChannelTypeCustom:         "Custom",
-	ChannelTypeAILS:           "AILS",
-	ChannelTypeAIProxy:        "AIProxy",
-	ChannelTypePaLM:           "PaLM",
-	ChannelTypeAPI2GPT:        "API2GPT",
-	ChannelTypeAIGC2D:         "AIGC2D",
-	ChannelTypeAnthropic:      "Anthropic",
-	ChannelTypeBaidu:          "Baidu",
-	ChannelTypeZhipu:          "Zhipu",
-	ChannelTypeAli:            "Ali",
-	ChannelTypeXunfei:         "Xunfei",
-	ChannelType360:            "360",
-	ChannelTypeOpenRouter:     "OpenRouter",
-	ChannelTypeAIProxyLibrary: "AIProxyLibrary",
-	ChannelTypeFastGPT:        "FastGPT",
-	ChannelTypeTencent:        "Tencent",
-	ChannelTypeGemini:         "Gemini",
-	ChannelTypeMoonshot:       "Moonshot",
-	ChannelTypeZhipu_v4:       "ZhipuV4",
-	ChannelTypePerplexity:     "Perplexity",
-	ChannelTypeLingYiWanWu:    "LingYiWanWu",
-	ChannelTypeAws:            "AWS",
-	ChannelTypeCohere:         "Cohere",
-	ChannelTypeMiniMax:        "MiniMax",
-	ChannelTypeSunoAPI:        "SunoAPI",
-	ChannelTypeDify:           "Dify",
-	ChannelTypeJina:           "Jina",
-	ChannelCloudflare:         "Cloudflare",
-	ChannelTypeSiliconFlow:    "SiliconFlow",
-	ChannelTypeVertexAi:       "VertexAI",
-	ChannelTypeMistral:        "Mistral",
-	ChannelTypeDeepSeek:       "DeepSeek",
-	ChannelTypeMokaAI:         "MokaAI",
-	ChannelTypeVolcEngine:     "VolcEngine",
-	ChannelTypeBaiduV2:        "BaiduV2",
-	ChannelTypeXinference:     "Xinference",
-	ChannelTypeXai:            "xAI",
-	ChannelTypeCoze:           "Coze",
-	ChannelTypeKling:          "Kling",
-	ChannelTypeJimeng:         "Jimeng",
-	ChannelTypeVidu:           "Vidu",
-	ChannelTypeSubmodel:       "Submodel",
-	ChannelTypeDoubaoVideo:    "DoubaoVideo",
-	ChannelTypeSora:           "Sora",
-	ChannelTypeReplicate:      "Replicate",
-	ChannelTypeCodex:          "Codex",
-	ChannelTypeSecureSkill:    "SecureSkill",
-	ChannelTypeAPIMart:        "APIMart",
-	ChannelTypeCodeFoxAsync:   "CodeFoxAsync",
+	ChannelTypeUnknown:             "Unknown",
+	ChannelTypeOpenAI:              "OpenAI",
+	ChannelTypeMidjourney:          "Midjourney",
+	ChannelTypeAzure:               "Azure",
+	ChannelTypeOllama:              "Ollama",
+	ChannelTypeMidjourneyPlus:      "MidjourneyPlus",
+	ChannelTypeOpenAIMax:           "OpenAIMax",
+	ChannelTypeOhMyGPT:             "OhMyGPT",
+	ChannelTypeCustom:              "Custom",
+	ChannelTypeAILS:                "AILS",
+	ChannelTypeAIProxy:             "AIProxy",
+	ChannelTypePaLM:                "PaLM",
+	ChannelTypeAPI2GPT:             "API2GPT",
+	ChannelTypeAIGC2D:              "AIGC2D",
+	ChannelTypeAnthropic:           "Anthropic",
+	ChannelTypeBaidu:               "Baidu",
+	ChannelTypeZhipu:               "Zhipu",
+	ChannelTypeAli:                 "Ali",
+	ChannelTypeXunfei:              "Xunfei",
+	ChannelType360:                 "360",
+	ChannelTypeOpenRouter:          "OpenRouter",
+	ChannelTypeAIProxyLibrary:      "AIProxyLibrary",
+	ChannelTypeFastGPT:             "FastGPT",
+	ChannelTypeTencent:             "Tencent",
+	ChannelTypeGemini:              "Gemini",
+	ChannelTypeMoonshot:            "Moonshot",
+	ChannelTypeZhipu_v4:            "ZhipuV4",
+	ChannelTypePerplexity:          "Perplexity",
+	ChannelTypeLingYiWanWu:         "LingYiWanWu",
+	ChannelTypeAws:                 "AWS",
+	ChannelTypeCohere:              "Cohere",
+	ChannelTypeMiniMax:             "MiniMax",
+	ChannelTypeSunoAPI:             "SunoAPI",
+	ChannelTypeDify:                "Dify",
+	ChannelTypeJina:                "Jina",
+	ChannelCloudflare:              "Cloudflare",
+	ChannelTypeSiliconFlow:         "SiliconFlow",
+	ChannelTypeVertexAi:            "VertexAI",
+	ChannelTypeMistral:             "Mistral",
+	ChannelTypeDeepSeek:            "DeepSeek",
+	ChannelTypeMokaAI:              "MokaAI",
+	ChannelTypeVolcEngine:          "VolcEngine",
+	ChannelTypeBaiduV2:             "BaiduV2",
+	ChannelTypeXinference:          "Xinference",
+	ChannelTypeXai:                 "xAI",
+	ChannelTypeCoze:                "Coze",
+	ChannelTypeKling:               "Kling",
+	ChannelTypeJimeng:              "Jimeng",
+	ChannelTypeVidu:                "Vidu",
+	ChannelTypeSubmodel:            "Submodel",
+	ChannelTypeDoubaoVideo:         "DoubaoVideo",
+	ChannelTypeSora:                "Sora",
+	ChannelTypeReplicate:           "Replicate",
+	ChannelTypeCodex:               "Codex",
+	ChannelTypeSecureSkill:         "ZZoneH3",
+	ChannelTypeAPIMart:             "APIMart",
+	ChannelTypeCodeFoxAsync:        "CodeFoxAsync",
+	ChannelTypeSecureSkillNativeH3: "SecureSkillH3",
 }
 
 func GetChannelTypeName(channelType int) string {

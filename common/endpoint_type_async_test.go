@@ -14,3 +14,14 @@ func TestAsyncImageChannelEndpointTypeIsNotDuplicated(t *testing.T) {
 		}
 	}
 }
+
+func TestSecureSkillNativeH3UsesVideoEndpointAndOpenAIAdminType(t *testing.T) {
+	got := GetEndpointTypesByChannelType(constant.ChannelTypeSecureSkillNativeH3, "minimax-h3")
+	if len(got) != 1 || got[0] != constant.EndpointTypeOpenAIVideo {
+		t.Fatalf("endpoint types = %#v", got)
+	}
+	apiType, ok := ChannelType2APIType(constant.ChannelTypeSecureSkillNativeH3)
+	if !ok || apiType != constant.APITypeOpenAI {
+		t.Fatalf("api type = %d, ok = %v", apiType, ok)
+	}
+}

@@ -86,6 +86,13 @@ type requestPayload struct {
 	Seconds int      `json:"seconds"`
 }
 
+type secureSkillNativeRequestPayload struct {
+	Model     string   `json:"model"`
+	Prompt    string   `json:"prompt"`
+	ImageURLs []string `json:"image_urls"`
+	Duration  int      `json:"duration"`
+}
+
 type responseTask struct {
 	ID          string `json:"id"`
 	TaskID      string `json:"task_id,omitempty"`
@@ -186,11 +193,17 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, _ *relaycommon.RelayInfo)
 	if err != nil {
 		return nil, err
 	}
-	body := requestPayload{
-		Model:   ModelName,
-		Prompt:  req.Prompt,
-		Images:  req.Images,
-		Seconds: req.Duration,
+	var body interface{}
+	if a.ChannelType == constant.ChannelTypeSecureSkillNativeH3 {
+		body = secureSkillNativeRequestPayload{
+			Model: ModelName, Prompt: req.Prompt,
+			ImageURLs: req.Images, Duration: req.Duration,
+		}
+	} else {
+		body = requestPayload{
+			Model: ModelName, Prompt: req.Prompt,
+			Images: req.Images, Seconds: req.Duration,
+		}
 	}
 	data, err := common.Marshal(body)
 	if err != nil {
