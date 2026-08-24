@@ -13,6 +13,13 @@ func BodyStorageCleanup() gin.HandlerFunc {
 		// 处理请求
 		c.Next()
 
+		// Multipart parsing may spill files to disk. Remove those temporary files
+		// only after every downstream handler and adaptor has completed.
+		if c.Request != nil && c.Request.MultipartForm != nil {
+			_ = c.Request.MultipartForm.RemoveAll()
+			c.Request.MultipartForm = nil
+		}
+
 		// 请求结束后清理存储
 		common.CleanupBodyStorage(c)
 
