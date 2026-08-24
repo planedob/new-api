@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,7 +36,22 @@ func Distribute() func(c *gin.Context) {
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+			statusCode := http.StatusBadRequest
+			if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+				statusCode = http.StatusRequestEntityTooLarge
+			}
+			message := i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()})
+			if isImageEditsPath(c.Request.URL.Path) {
+				abortWithOpenAiMessageAndRecord(c, statusCode, message, types.ErrorCodeInvalidRequest, service.RelayErrorLogOptions{
+					Stage:          "request_validation",
+					UpstreamCalled: false,
+					BillingState:   service.RelayErrorBillingNotStarted,
+					Charged:        common.GetPointer(false),
+					Image2:         &service.Image2RequestCapability{Operation: "edits"},
+				})
+			} else {
+				abortWithOpenAiMessage(c, statusCode, message, types.ErrorCodeInvalidRequest)
+			}
 			return
 		}
 		if modelRequest.Model != "" {
@@ -250,11 +266,13 @@ func Distribute() func(c *gin.Context) {
 func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	var modelRequest ModelRequest
 	if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-		if _, err := c.MultipartForm(); err != nil {
-			return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+		form, err := common.ParseMultipartFormReusable(c)
+		if err != nil {
+			return nil, err
 		}
-		modelRequest.Model = c.PostForm("model")
-		modelRequest.Group = c.PostForm("group")
+		values := url.Values(form.Value)
+		modelRequest.Model = values.Get("model")
+		modelRequest.Group = values.Get("group")
 		return &modelRequest, nil
 	}
 	err := common.UnmarshalBodyReusable(c, &modelRequest)
@@ -301,10 +319,11 @@ func getPlaygroundGroup(c *gin.Context) (string, error) {
 		return "", nil
 	}
 	if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-		if _, err := c.MultipartForm(); err != nil {
+		form, err := common.ParseMultipartFormReusable(c)
+		if err != nil {
 			return "", err
 		}
-		return strings.TrimSpace(c.PostForm("group")), nil
+		return strings.TrimSpace(url.Values(form.Value).Get("group")), nil
 	}
 	var request struct {
 		Group string `json:"group"`
@@ -449,7 +468,10 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		contentType := c.ContentType()
 		if slices.Contains([]string{gin.MIMEPOSTForm, gin.MIMEMultipartPOSTForm}, contentType) {
 			req, err := getModelFromRequest(c)
-			if err == nil && req.Model != "" {
+			if err != nil {
+				return nil, false, err
+			}
+			if req.Model != "" {
 				modelRequest.Model = req.Model
 			}
 		}

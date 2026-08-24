@@ -21,6 +21,7 @@ const KeyRequestBody = "key_request_body"
 const KeyBodyStorage = "key_body_storage"
 
 var ErrRequestBodyTooLarge = errors.New("request body too large")
+var ErrRequestBodyUnavailable = errors.New("request body is unavailable")
 
 func IsRequestBodyTooLargeError(err error) bool {
 	if err == nil {
@@ -78,6 +79,16 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 
 	// 缓存存储对象
 	c.Set(KeyBodyStorage, storage)
+	// A positive Content-Length with no readable bytes means an earlier
+	// consumer drained the request without preserving it. Treat that as a
+	// malformed request instead of caching an empty body and surfacing a
+	// misleading multipart EOF later. Do not compare the two lengths: request
+	// decompression legitimately changes the number of readable bytes.
+	if contentLength > 0 && storage.Size() == 0 {
+		_ = storage.Close()
+		c.Set(KeyBodyStorage, nil)
+		return nil, ErrRequestBodyUnavailable
+	}
 
 	return storage, nil
 }
@@ -235,6 +246,11 @@ func init() {
 }
 
 func ParseMultipartFormReusable(c *gin.Context) (*multipart.Form, error) {
+	if c.Request.MultipartForm != nil {
+		syncMultipartFormValues(c.Request, c.Request.MultipartForm)
+		return c.Request.MultipartForm, nil
+	}
+
 	storage, err := GetBodyStorage(c)
 	if err != nil {
 		return nil, err
@@ -264,12 +280,59 @@ func ParseMultipartFormReusable(c *gin.Context) (*multipart.Form, error) {
 		return nil, err
 	}
 
+	// Install one shared form before resetting the body. All downstream
+	// middleware and adaptors must reuse this object instead of parsing again.
+	syncMultipartFormValues(c.Request, form)
+
 	// Reset request body
 	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 		return nil, seekErr
 	}
 	c.Request.Body = io.NopCloser(storage)
 	return form, nil
+}
+
+func syncMultipartFormValues(request *http.Request, form *multipart.Form) {
+	if request == nil || form == nil {
+		return
+	}
+	request.MultipartForm = form
+	if request.PostForm == nil {
+		request.PostForm = make(url.Values)
+	}
+	mergeFormValuesOnce(request.PostForm, form.Value)
+
+	// Request.Form is the union of query and post values. Preserve any values
+	// already installed by another middleware and add only missing occurrences,
+	// so repeated reusable parses remain idempotent.
+	desired := make(url.Values)
+	for key, values := range request.URL.Query() {
+		desired[key] = append(desired[key], values...)
+	}
+	for key, values := range form.Value {
+		desired[key] = append(desired[key], values...)
+	}
+	if request.Form == nil {
+		request.Form = make(url.Values)
+	}
+	mergeFormValuesOnce(request.Form, desired)
+}
+
+func mergeFormValuesOnce(destination url.Values, source map[string][]string) {
+	for key, values := range source {
+		existingCounts := make(map[string]int, len(destination[key]))
+		for _, value := range destination[key] {
+			existingCounts[value]++
+		}
+		requiredCounts := make(map[string]int, len(values))
+		for _, value := range values {
+			requiredCounts[value]++
+			if existingCounts[value] < requiredCounts[value] {
+				destination[key] = append(destination[key], value)
+				existingCounts[value]++
+			}
+		}
+	}
 }
 
 func processFormMap(formMap map[string]any, v any) error {
