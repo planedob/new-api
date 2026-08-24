@@ -68,7 +68,15 @@ const (
 	ErrorCodeAccessDenied          ErrorCode = "access_denied"
 
 	// request error
-	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
+	ErrorCodeBadRequestBody            ErrorCode = "bad_request_body"
+	ErrorCodeImageEditMissingBoundary  ErrorCode = "image_edit_missing_boundary"
+	ErrorCodeImageEditTruncatedBody    ErrorCode = "image_edit_truncated_multipart"
+	ErrorCodeImageEditBodyUnavailable  ErrorCode = "image_edit_body_unavailable"
+	ErrorCodeImageEditMissingImage     ErrorCode = "image_edit_missing_image"
+	ErrorCodeImageEditEmptyImage       ErrorCode = "image_edit_empty_image"
+	ErrorCodeImageEditUnsupportedImage ErrorCode = "image_edit_unsupported_image"
+	ErrorCodeImageEditRequestTooLarge  ErrorCode = "image_edit_request_too_large"
+	ErrorCodeImageEditMalformed        ErrorCode = "image_edit_malformed_multipart"
 
 	// response error
 	ErrorCodeReadResponseBodyFailed ErrorCode = "read_response_body_failed"

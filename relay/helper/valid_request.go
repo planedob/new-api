@@ -149,7 +149,7 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 
 	switch relayMode {
 	case relayconstant.RelayModeImagesEdits:
-		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+		if common.IsMultipartFormData(c.Request.Header.Get("Content-Type")) {
 			formData, err := common.ParseMultipartFormReusable(c)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse image edit form request: %w", err)
@@ -244,7 +244,7 @@ const defaultImage2MaxInputMB = 50
 // fail-closed input contract.
 func validateImage2MultipartForm(form *multipart.Form) error {
 	if form == nil || form.File == nil {
-		return errors.New("image is required")
+		return common.ErrImageInputRequired
 	}
 
 	imageFiles := form.File["image"]
@@ -259,7 +259,7 @@ func validateImage2MultipartForm(form *multipart.Form) error {
 		}
 	}
 	if len(imageFiles) == 0 {
-		return errors.New("image is required")
+		return common.ErrImageInputRequired
 	}
 	for index, fileHeader := range imageFiles {
 		if err := validateImage2FileHeader(fileHeader, "image", index); err != nil {
@@ -277,7 +277,7 @@ func validateImage2MultipartForm(form *multipart.Form) error {
 
 func validateImage2FileHeader(fileHeader *multipart.FileHeader, fieldName string, index int) error {
 	if fileHeader == nil || fileHeader.Size <= 0 {
-		return fmt.Errorf("%s file %d is empty", fieldName, index)
+		return fmt.Errorf("%w: %s file %d is empty", common.ErrImageInputEmpty, fieldName, index)
 	}
 	maxMB := constant.MaxImage2InputMB
 	if maxMB <= 0 {
@@ -305,7 +305,7 @@ func validateImage2FileHeader(fileHeader *multipart.FileHeader, fieldName string
 	case "image/jpeg", "image/png", "image/webp":
 		return nil
 	default:
-		return fmt.Errorf("%s file %d has unsupported image content", fieldName, index)
+		return fmt.Errorf("%w: %s file %d has unsupported image content", common.ErrImageInputUnsupported, fieldName, index)
 	}
 }
 
