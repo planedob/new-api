@@ -54,6 +54,7 @@ func TestParseMultipartFormReusableAppendsEqualExistingValuesExactlyOnce(t *test
 	require.Equal(t, []string{"first", "first", "first", "second"}, context.Request.PostForm["tag"])
 	require.Equal(t, []string{"first", "first", "first", "second"}, context.Request.Form["tag"])
 	require.Equal(t, []string{"kept"}, context.Request.Form["existing"])
+	require.Equal(t, []string{"query"}, context.Request.Form["trace"])
 }
 
 func TestIsMultipartFormDataIsCaseInsensitive(t *testing.T) {

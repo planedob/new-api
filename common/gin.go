@@ -352,8 +352,9 @@ func installMultipartFormValues(request *http.Request, form *multipart.Form) {
 	}
 	request.MultipartForm = form
 	if request.Form == nil {
-		request.Form = cloneFormValues(request.URL.Query())
+		request.Form = make(url.Values)
 	}
+	mergeFormValuesAtLeast(request.Form, request.URL.Query())
 	request.PostForm = appendFormValues(request.PostForm, form.Value)
 	request.Form = appendFormValues(request.Form, form.Value)
 }
@@ -366,12 +367,9 @@ func syncExistingMultipartFormValues(request *http.Request, form *multipart.Form
 		request.PostForm = appendFormValues(nil, form.Value)
 	}
 	if request.Form == nil {
-		request.Form = appendFormValues(cloneFormValues(request.URL.Query()), form.Value)
+		request.Form = appendFormValues(nil, form.Value)
 	}
-}
-
-func cloneFormValues(source url.Values) url.Values {
-	return appendFormValues(nil, source)
+	mergeFormValuesAtLeast(request.Form, request.URL.Query())
 }
 
 func appendFormValues(destination url.Values, source map[string][]string) url.Values {
@@ -382,6 +380,28 @@ func appendFormValues(destination url.Values, source map[string][]string) url.Va
 		destination[key] = append(destination[key], values...)
 	}
 	return destination
+}
+
+// mergeFormValuesAtLeast ensures the destination contains every query-value
+// occurrence without duplicating values already installed by net/http or an
+// earlier middleware. Multipart body values deliberately use appendFormValues
+// instead: they must be appended in full exactly once, even when equal to an
+// existing value.
+func mergeFormValuesAtLeast(destination url.Values, source map[string][]string) {
+	for key, values := range source {
+		existingCounts := make(map[string]int, len(destination[key]))
+		for _, value := range destination[key] {
+			existingCounts[value]++
+		}
+		requiredCounts := make(map[string]int, len(values))
+		for _, value := range values {
+			requiredCounts[value]++
+			if existingCounts[value] < requiredCounts[value] {
+				destination[key] = append(destination[key], value)
+				existingCounts[value]++
+			}
+		}
+	}
 }
 
 func processFormMap(formMap map[string]any, v any) error {
