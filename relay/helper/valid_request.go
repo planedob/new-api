@@ -396,12 +396,95 @@ func GetAndValidateGeminiRequest(c *gin.Context) (*dto.GeminiChatRequest, error)
 	if len(request.Contents) == 0 && len(request.Requests) == 0 {
 		return nil, errors.New("contents is required")
 	}
+	if err := validateGeminiThoughtSignatures(request); err != nil {
+		return nil, err
+	}
 
 	//if c.Query("alt") == "sse" {
 	//	relayInfo.IsStream = true
 	//}
 
 	return request, nil
+}
+
+// validateGeminiThoughtSignatures enforces the native Gemini continuation
+// contract before channel selection, billing, or an upstream request. The
+// signature remains a json.RawMessage in dto.GeminiPart so validation never
+// rewrites or normalizes the bytes that a valid model turn supplied.
+func validateGeminiThoughtSignatures(request *dto.GeminiChatRequest) error {
+	return validateGeminiThoughtSignaturesAtPath(request, "")
+}
+
+func validateGeminiThoughtSignaturesAtPath(request *dto.GeminiChatRequest, pathPrefix string) error {
+	if request == nil {
+		return nil
+	}
+
+	for contentIndex, content := range request.Contents {
+		contentPath := fmt.Sprintf("%scontents[%d]", pathPrefix, contentIndex)
+		if err := validateGeminiContentThoughtSignatures(contentPath, content); err != nil {
+			return err
+		}
+	}
+
+	if request.SystemInstructions != nil {
+		if err := validateGeminiContentThoughtSignatures(pathPrefix+"systemInstruction", *request.SystemInstructions); err != nil {
+			return err
+		}
+	}
+
+	for requestIndex := range request.Requests {
+		requestPath := fmt.Sprintf("%srequests[%d].", pathPrefix, requestIndex)
+		if err := validateGeminiThoughtSignaturesAtPath(&request.Requests[requestIndex], requestPath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateGeminiContentThoughtSignatures(contentPath string, content dto.GeminiChatContent) error {
+	role := content.Role
+	if role == "" {
+		role = "user"
+	}
+
+	for partIndex, part := range content.Parts {
+		if len(part.ThoughtSignature) == 0 {
+			continue
+		}
+
+		partPath := fmt.Sprintf("%s.parts[%d].thoughtSignature", contentPath, partIndex)
+		if common.GetJsonType(part.ThoughtSignature) != "string" {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("%s must be a non-empty JSON string", partPath),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+
+		var signature string
+		if err := common.Unmarshal(part.ThoughtSignature, &signature); err != nil || strings.TrimSpace(signature) == "" {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("%s must be a non-empty JSON string", partPath),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+
+		if role != "model" {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("%s is only allowed on role=model content", partPath),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+	}
+
+	return nil
 }
 
 func GetAndValidateGeminiEmbeddingRequest(c *gin.Context) (*dto.GeminiEmbeddingRequest, error) {
