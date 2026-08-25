@@ -25,6 +25,7 @@ import {
   createLatestInputStore,
   createRequestAbortRegistry,
   getEnabledImageSources,
+  resolveImagePreviewPrompt,
 } from './playgroundRequestState.js';
 
 test('blank image inputs are not counted as attached images', () => {
@@ -51,6 +52,18 @@ test('latest input store exposes pasted images to a previously captured sender',
   assert.deepEqual(getEnabledImageSources(capturedSender()), [
     'data:image/png;base64,iVBORw0KGgo=',
   ]);
+});
+
+test('image preview uses the current draft instead of the previous submitted prompt', () => {
+  assert.equal(
+    resolveImagePreviewPrompt(' current request ', 'previous request'),
+    'current request',
+  );
+  assert.equal(
+    resolveImagePreviewPrompt('', ' previous request '),
+    'previous request',
+  );
+  assert.equal(resolveImagePreviewPrompt('  ', ''), '示例图片提示词');
 });
 
 test('request abort registry aborts the active non-stream request exactly once', () => {

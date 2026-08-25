@@ -44,6 +44,19 @@ export const countValidImageSources = (sources = []) =>
   sources.filter((source) => typeof source === 'string' && source.trim() !== '')
     .length;
 
+export const resolveImagePreviewPrompt = (
+  draftPrompt,
+  lastSubmittedPrompt,
+  fallback = '示例图片提示词',
+) => {
+  const draft = typeof draftPrompt === 'string' ? draftPrompt.trim() : '';
+  if (draft) return draft;
+
+  const submitted =
+    typeof lastSubmittedPrompt === 'string' ? lastSubmittedPrompt.trim() : '';
+  return submitted || fallback;
+};
+
 export const createRequestAbortRegistry = () => {
   let activeController = null;
 

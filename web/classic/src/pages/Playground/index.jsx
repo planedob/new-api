@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useContext, useEffect, useCallback, useRef } from 'react';
+import React, {
+  useContext,
+  useEffect,
+  useCallback,
+  useRef,
+  useState,
+} from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Layout, Toast, Modal } from '@douyinfe/semi-ui';
@@ -52,6 +58,7 @@ import {
   isGptImage2Model,
   encodeToBase64,
   getEnabledImageSources,
+  resolveImagePreviewPrompt,
 } from '../../helpers';
 
 // Components
@@ -127,6 +134,7 @@ const Playground = () => {
   const isMobile = useIsMobile();
   const styleState = { isMobile };
   const [searchParams] = useSearchParams();
+  const [draftPrompt, setDraftPrompt] = useState('');
 
   const state = usePlaygroundState();
   const {
@@ -245,7 +253,10 @@ const Playground = () => {
         const lastUserMessage = [...message]
           .reverse()
           .find((item) => item.role === MESSAGE_ROLES.USER);
-        const prompt = getTextContent(lastUserMessage) || '示例图片提示词';
+        const prompt = resolveImagePreviewPrompt(
+          draftPrompt,
+          getTextContent(lastUserMessage),
+        );
         const imageSources = (
           inputs.imageEnabled ? inputs.imageUrls : []
         ).filter((url) => String(url).trim() !== '');
@@ -296,7 +307,14 @@ const Playground = () => {
       console.error('构造预览请求体失败:', error);
       return null;
     }
-  }, [inputs, parameterEnabled, message, customRequestMode, customRequestBody]);
+  }, [
+    inputs,
+    parameterEnabled,
+    message,
+    customRequestMode,
+    customRequestBody,
+    draftPrompt,
+  ]);
 
   // 发送消息
   async function onMessageSend(content, attachment) {
@@ -652,6 +670,9 @@ const Playground = () => {
                   showDebugPanel={showDebugPanel}
                   roleInfo={roleInfo}
                   onMessageSend={onMessageSend}
+                  onInputChange={({ value, inputValue }) =>
+                    setDraftPrompt(value ?? inputValue ?? '')
+                  }
                   onMessageCopy={messageActions.handleMessageCopy}
                   onMessageReset={messageActions.handleMessageReset}
                   onMessageDelete={messageActions.handleMessageDelete}

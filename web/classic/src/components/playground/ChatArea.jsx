@@ -31,6 +31,7 @@ const ChatArea = ({
   showDebugPanel,
   roleInfo,
   onMessageSend,
+  onInputChange,
   onMessageCopy,
   onMessageReset,
   onMessageDelete,
@@ -111,6 +112,7 @@ const ChatArea = ({
           }}
           chats={message}
           onMessageSend={onMessageSend}
+          onInputChange={onInputChange}
           onMessageCopy={onMessageCopy}
           onMessageReset={onMessageReset}
           onMessageDelete={onMessageDelete}
