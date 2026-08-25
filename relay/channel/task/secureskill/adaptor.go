@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -93,19 +94,62 @@ type secureSkillNativeRequestPayload struct {
 	Duration  int      `json:"duration"`
 }
 
+// h3Duration accepts the provider's observed response encodings while keeping
+// malformed or fractional values fail-closed. Duration is informational in a
+// task response, so a provider null maps to zero.
+type h3Duration int
+
+func (d *h3Duration) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if raw == "null" {
+		*d = 0
+		return nil
+	}
+	if raw == "" {
+		return fmt.Errorf("empty minimax-h3 duration")
+	}
+	if strings.HasPrefix(raw, "\"") {
+		var value string
+		if err := common.Unmarshal(data, &value); err != nil {
+			return fmt.Errorf("invalid minimax-h3 duration: %w", err)
+		}
+		raw = strings.TrimSpace(value)
+	}
+	if raw == "" {
+		return fmt.Errorf("invalid minimax-h3 duration: empty string")
+	}
+	if value, err := strconv.ParseInt(raw, 10, strconv.IntSize); err == nil {
+		*d = h3Duration(int(value))
+		return nil
+	}
+	if !strings.ContainsAny(raw, ".eE") {
+		return fmt.Errorf("invalid minimax-h3 duration %q", raw)
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value {
+		return fmt.Errorf("invalid minimax-h3 duration %q", raw)
+	}
+	intBoundary := math.Pow(2, float64(strconv.IntSize-1))
+	if value < -intBoundary || value >= intBoundary {
+		return fmt.Errorf("minimax-h3 duration out of range")
+	}
+	*d = h3Duration(int(value))
+	return nil
+}
+
 type responseTask struct {
-	ID          string `json:"id"`
-	TaskID      string `json:"task_id,omitempty"`
-	Object      string `json:"object,omitempty"`
-	Model       string `json:"model,omitempty"`
-	Status      string `json:"status"`
-	Progress    int    `json:"progress,omitempty"`
-	CreatedAt   int64  `json:"created_at,omitempty"`
-	CompletedAt int64  `json:"completed_at,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"`
-	Duration    int    `json:"duration,omitempty"`
-	VideoURL    string `json:"video_url,omitempty"`
-	URL         string `json:"url,omitempty"`
+	ID          string     `json:"id"`
+	TaskID      string     `json:"task_id,omitempty"`
+	Object      string     `json:"object,omitempty"`
+	Model       string     `json:"model,omitempty"`
+	Status      string     `json:"status"`
+	Progress    int        `json:"progress,omitempty"`
+	CreatedAt   int64      `json:"created_at,omitempty"`
+	CompletedAt int64      `json:"completed_at,omitempty"`
+	ExpiresAt   int64      `json:"expires_at,omitempty"`
+	Duration    h3Duration `json:"duration,omitempty"`
+	VideoURL    string     `json:"video_url,omitempty"`
+	URL         string     `json:"url,omitempty"`
 	Error       *struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`

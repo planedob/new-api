@@ -118,7 +118,11 @@ func Distribute() func(c *gin.Context) {
 			// Select a channel for the user
 			// check token model mapping
 			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
+			// Public task reads identify the task in the URL and legitimately have
+			// no request model. Only GET fetches receive this compatibility path;
+			// POST, remix, and unrelated endpoints remain model-limited.
+			readOnlyTaskFetch := isReadOnlyTaskFetchRequest(c.Request.Method, c.Request.URL.Path) && modelRequest.Model == ""
+			if modelLimitEnable && !readOnlyTaskFetch {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
@@ -311,6 +315,17 @@ func isImageTaskPath(path string) bool {
 		path == "/v1/images/batches" ||
 		strings.HasPrefix(path, "/v1/images/batches/") ||
 		path == "/pg/images/jobs/generations" ||
+		strings.HasPrefix(path, "/pg/images/jobs/")
+}
+
+func isReadOnlyTaskFetchRequest(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	return (strings.HasPrefix(path, "/v1/videos/") && !strings.HasSuffix(path, "/remix")) ||
+		(strings.HasPrefix(path, "/v1/video/generations/") && !strings.HasSuffix(path, "/remix")) ||
+		strings.HasPrefix(path, "/v1/images/generations/jobs/") ||
+		strings.HasPrefix(path, "/v1/images/batches/") ||
 		strings.HasPrefix(path, "/pg/images/jobs/")
 }
 

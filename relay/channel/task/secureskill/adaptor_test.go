@@ -79,6 +79,39 @@ func TestBuildRequestBodyConvertsMultipartImagesAndUsesFixedModel(t *testing.T) 
 	}
 }
 
+func TestParseTaskResultAcceptsSecureSkillDurationEncodings(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "number", body: `{"status":"completed","duration":5}`},
+		{name: "integral decimal number", body: `{"status":"completed","duration":5.0}`},
+		{name: "numeric string", body: `{"status":"completed","duration":"5"}`},
+		{name: "null", body: `{"status":"completed","duration":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := adaptor.ParseTaskResult([]byte(tc.body)); err != nil {
+				t.Fatalf("ParseTaskResult() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestParseTaskResultRejectsInvalidSecureSkillDuration(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	for _, body := range []string{
+		`{"status":"completed","duration":"not-a-number"}`,
+		`{"status":"completed","duration":5.5}`,
+		`{"status":"completed","duration":true}`,
+		`{"status":"completed","duration":"9223372036854775808"}`,
+	} {
+		if _, err := adaptor.ParseTaskResult([]byte(body)); err == nil {
+			t.Fatalf("ParseTaskResult(%s) unexpectedly succeeded", body)
+		}
+	}
+}
+
 func TestBuildRequestBodyKeepsSecureSkillAndZZoneWireContractsIsolated(t *testing.T) {
 	tests := []struct {
 		name      string

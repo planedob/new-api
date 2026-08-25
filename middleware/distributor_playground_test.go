@@ -7,7 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	projecti18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetPlaygroundGroupReadsJSONImageRequest(t *testing.T) {
@@ -106,6 +110,69 @@ func TestPlaygroundImage2ChatRequestIsRejected(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := isPlaygroundImage2ChatRequest(testCase.path, testCase.model); got != testCase.want {
 				t.Fatalf("isPlaygroundImage2ChatRequest(%q, %q) = %v, want %v", testCase.path, testCase.model, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestReadOnlyTaskFetchRequestRequiresGETAndKnownFetchPath(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		method string
+		path   string
+		want   bool
+	}{
+		{name: "video task", method: http.MethodGet, path: "/v1/videos/task_public", want: true},
+		{name: "video content", method: http.MethodGet, path: "/v1/videos/task_public/content", want: true},
+		{name: "legacy video task", method: http.MethodGet, path: "/v1/video/generations/task_public", want: true},
+		{name: "image job", method: http.MethodGet, path: "/v1/images/generations/jobs/task_public", want: true},
+		{name: "image batch", method: http.MethodGet, path: "/v1/images/batches/task_public", want: true},
+		{name: "playground image job", method: http.MethodGet, path: "/pg/images/jobs/task_public", want: true},
+		{name: "post task", method: http.MethodPost, path: "/v1/videos/task_public", want: false},
+		{name: "remix", method: http.MethodGet, path: "/v1/videos/task_public/remix", want: false},
+		{name: "collection", method: http.MethodGet, path: "/v1/videos", want: false},
+		{name: "unrelated", method: http.MethodGet, path: "/v1/chat/completions", want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isReadOnlyTaskFetchRequest(testCase.method, testCase.path); got != testCase.want {
+				t.Fatalf("isReadOnlyTaskFetchRequest(%q, %q) = %v, want %v", testCase.method, testCase.path, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestDistributeAllowsEmptyModelOnlyForReadOnlyTaskGET(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	require.NoError(t, projecti18n.Init())
+	for _, testCase := range []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+	}{
+		{name: "task get", method: http.MethodGet, path: "/v1/videos/task_public", wantStatus: http.StatusNoContent},
+		{name: "content get", method: http.MethodGet, path: "/v1/videos/task_public/content", wantStatus: http.StatusNoContent},
+		{name: "empty post remains model limited", method: http.MethodPost, path: "/v1/videos/task_public", body: `{}`, wantStatus: http.StatusForbidden},
+		{name: "remix remains model limited", method: http.MethodPost, path: "/v1/videos/task_public/remix", body: `{}`, wantStatus: http.StatusForbidden},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+				common.SetContextKey(c, constant.ContextKeyTokenModelLimit, map[string]bool{"minimax-hailuo-2.3": true})
+				c.Next()
+			})
+			router.Handle(testCase.method, testCase.path, Distribute(), func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+
+			request := httptest.NewRequest(testCase.method, testCase.path, bytes.NewBufferString(testCase.body))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != testCase.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, testCase.wantStatus, recorder.Body.String())
 			}
 		})
 	}
