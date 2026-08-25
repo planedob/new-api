@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,6 +16,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type image2RoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f image2RoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func image2FakeHTTPResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+	}
+}
+
 func TestImage2RegressionReplaysSameRequestAcrossDistinctChannelsOnce(t *testing.T) {
 	const requestID = "image2-regression-request-1"
 	requestBody := []byte(`{"model":"gpt-image-2","prompt":"a blue square"}`)
@@ -24,17 +37,15 @@ func TestImage2RegressionReplaysSameRequestAcrossDistinctChannelsOnce(t *testing
 	requestCounts := make([]int, len(statuses))
 	receivedBodies := make([][]byte, len(statuses))
 	receivedRequestIDs := make([]string, len(statuses))
-	servers := make([]*httptest.Server, len(statuses))
-	for index, status := range statuses {
-		index, status := index, status
-		servers[index] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			requestCounts[index]++
-			receivedBodies[index], _ = io.ReadAll(r.Body)
-			receivedRequestIDs[index] = r.Header.Get(common.RequestIdKey)
-			w.WriteHeader(status)
-		}))
-		t.Cleanup(servers[index].Close)
-	}
+	attemptIndex := 0
+	client := &http.Client{Transport: image2RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		index := attemptIndex
+		attemptIndex++
+		requestCounts[index]++
+		receivedBodies[index], _ = io.ReadAll(request.Body)
+		receivedRequestIDs[index] = request.Header.Get(common.RequestIdKey)
+		return image2FakeHTTPResponse(statuses[index], ""), nil
+	})}
 
 	router := newImage2SmartRouter(Image2RequestCapability{Operation: "generations", Resolution: "1024", N: 1}, []*model.Channel{
 		image2TestChannel(1, 10, []string{"generations"}, []string{"1024"}, false),
@@ -45,17 +56,17 @@ func TestImage2RegressionReplaysSameRequestAcrossDistinctChannelsOnce(t *testing
 	require.True(t, router.HasCandidates())
 	usedChannels := make([]int, 0, len(statuses))
 
-	for _, server := range servers {
+	for range statuses {
 		channel, routeErr := retryParam.Image2Router.Next()
 		require.Nil(t, routeErr)
 		require.False(t, retryParam.IsChannelExcluded(channel.Id))
 		retryParam.ExcludeChannel(channel.Id)
 		usedChannels = append(usedChannels, channel.Id)
 
-		request, requestErr := http.NewRequest(http.MethodPost, server.URL, bytes.NewReader(requestBody))
+		request, requestErr := http.NewRequest(http.MethodPost, "https://fake-upstream.invalid/attempt", bytes.NewReader(requestBody))
 		require.NoError(t, requestErr)
 		request.Header.Set(common.RequestIdKey, requestID)
-		response, requestErr := http.DefaultClient.Do(request)
+		response, requestErr := client.Do(request)
 		require.NoError(t, requestErr)
 		_, _ = io.Copy(io.Discard, response.Body)
 		require.NoError(t, response.Body.Close())
@@ -101,12 +112,20 @@ func TestImage2RegressionDoesNotReplayGuardedFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			firstCalls, fallbackCalls := 0, 0
-			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { firstCalls++; w.WriteHeader(test.status) }))
-			fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fallbackCalls++; w.WriteHeader(http.StatusOK) }))
-			t.Cleanup(first.Close)
-			t.Cleanup(fallback.Close)
+			client := &http.Client{Transport: image2RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				switch request.URL.Host {
+				case "first.invalid":
+					firstCalls++
+					return image2FakeHTTPResponse(test.status, ""), nil
+				case "fallback.invalid":
+					fallbackCalls++
+					return image2FakeHTTPResponse(http.StatusOK, ""), nil
+				default:
+					return nil, errors.New("unexpected fake upstream")
+				}
+			})}
 
-			response, requestErr := http.Get(first.URL)
+			response, requestErr := client.Get("https://first.invalid/image")
 			require.NoError(t, requestErr)
 			require.NoError(t, response.Body.Close())
 			decision := EvaluateSafeFailover(SafeFailoverInput{
@@ -115,7 +134,7 @@ func TestImage2RegressionDoesNotReplayGuardedFailures(t *testing.T) {
 				Error: types.NewErrorWithStatusCode(errors.New(test.message), test.errorCode, test.status),
 			})
 			if decision.Retry {
-				_, requestErr = http.Get(fallback.URL)
+				_, requestErr = client.Get("https://fallback.invalid/image")
 				require.NoError(t, requestErr)
 			}
 			require.False(t, decision.Retry)
@@ -141,15 +160,8 @@ func TestImage2PassiveTimeoutObservationKeepsFailoverState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			status := test.status
 			resetRelayPassiveMonitorForTest()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(status)
-				_, _ = io.WriteString(w, `{"error":{"message":"gateway timeout"}}`)
-			}))
-			t.Cleanup(server.Close)
-
-			response, err := http.Get(server.URL)
-			require.NoError(t, err)
+			response := image2FakeHTTPResponse(status, `{"error":{"message":"gateway timeout"}}`)
+			response.Header.Set("Content-Type", "application/json")
 			apiErr := RelayErrorHandler(context.Background(), response, false)
 			require.Equal(t, status, apiErr.StatusCode)
 
