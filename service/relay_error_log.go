@@ -46,11 +46,32 @@ type RelayErrorLogOptions struct {
 	ModelName             string
 	Group                 string
 	UpstreamCalled        bool
+	UpstreamAccepted      *bool
+	TaskState             string
+	RefundState           string
 	BillingState          RelayErrorBillingState
 	Charged               *bool
 	Image2                *Image2RequestCapability
 	Image2ResponseFailure string
 	Extra                 map[string]interface{}
+}
+
+func normalizeRelayTaskState(state string) string {
+	switch state {
+	case "not_applicable", "unknown", "not_created", "queued", "running", "succeeded", "failed", "cancelled":
+		return state
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeRelayRefundState(state string) string {
+	switch state {
+	case "not_required", "pending", "completed", "failed", "unknown":
+		return state
+	default:
+		return "unknown"
+	}
 }
 
 var image2ResponseFailureAllowlist = map[string]struct{}{
@@ -274,21 +295,35 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	// This is explicit rather than inferred from channel_id: a selected channel
 	// can still fail before its adapter sends anything upstream.
 	other["upstream_called"] = options.UpstreamCalled
+	upstreamState := "not_called"
+	if options.UpstreamCalled {
+		upstreamState = "called"
+	}
+	other["upstream_accepted_known"] = options.UpstreamAccepted != nil
+	if options.UpstreamAccepted != nil {
+		other["upstream_accepted"] = *options.UpstreamAccepted
+		if *options.UpstreamAccepted {
+			upstreamState = "accepted"
+		}
+	}
+	other["upstream_state"] = upstreamState
+	other["task_state"] = normalizeRelayTaskState(options.TaskState)
+	other["refund_state"] = normalizeRelayRefundState(options.RefundState)
+	other["billing_state"] = normalizeRelayErrorBillingState(options.BillingState)
+	if options.Charged != nil {
+		other["charge_known"] = true
+		other["charged"] = *options.Charged
+	} else if options.BillingState == RelayErrorBillingNotStarted || options.BillingState == RelayErrorBillingNotApplicable {
+		other["charge_known"] = true
+		other["charged"] = false
+	} else {
+		other["charge_known"] = false
+	}
 	if options.Image2 != nil {
 		other["failure_scope"] = "pre_upstream"
-		other["billing_state"] = normalizeRelayErrorBillingState(options.BillingState)
 		other["request_route"] = "images"
 		other["request_method"] = requestMethod(c)
 		other["elapsed_ms"] = relayPassiveElapsed(c).Milliseconds()
-		if options.Charged != nil {
-			other["charge_known"] = true
-			other["charged"] = *options.Charged
-		} else if options.BillingState == RelayErrorBillingNotStarted || options.BillingState == RelayErrorBillingNotApplicable {
-			other["charge_known"] = true
-			other["charged"] = false
-		} else {
-			other["charge_known"] = false
-		}
 	}
 	if image2ResponseFailure != "" {
 		other["failure_scope"] = "upstream_response"

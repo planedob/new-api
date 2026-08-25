@@ -337,7 +337,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 
 		if !shouldRetry(c, relayInfo, newAPIError, maxRetries-retryParam.GetRetry(), time.Since(attemptStartedAt)) {
 			break
@@ -529,7 +529,7 @@ func shouldRetry(c *gin.Context, info *relaycommon.RelayInfo, openaiErr *types.N
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, relayInfos ...*relaycommon.RelayInfo) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	// Passive monitoring is strictly observational; it does not participate in
 	// retry decisions or channel health state.
@@ -542,12 +542,40 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		})
 	}
 
-	service.RecordRelayErrorLog(c, err, service.RelayErrorLogOptions{
+	logOptions := service.RelayErrorLogOptions{
 		Stage:                 "upstream",
 		Channel:               &channelError,
 		UpstreamCalled:        common.GetContextKeyBool(c, constant.ContextKeyUpstreamCalled),
 		Image2ResponseFailure: service.Image2ResponseFailure(c),
-	})
+		TaskState:             "not_applicable",
+		RefundState:           "unknown",
+	}
+	if len(relayInfos) > 0 && relayInfos[0] != nil {
+		info := relayInfos[0]
+		accepted := info.UpstreamAccepted || service.Image2ResponseFailure(c) != ""
+		logOptions.UpstreamAccepted = &accepted
+		switch info.RelayMode {
+		case relayconstant.RelayModeSunoSubmit, relayconstant.RelayModeVideoSubmit, relayconstant.RelayModeImageTaskSubmit:
+			logOptions.TaskState = "unknown"
+		}
+		if info.Billing == nil {
+			charged := false
+			logOptions.BillingState = service.RelayErrorBillingNotStarted
+			logOptions.Charged = &charged
+			logOptions.RefundState = "not_required"
+		} else if info.Billing.GetPreConsumedQuota() <= 0 {
+			charged := false
+			logOptions.BillingState = service.RelayErrorBillingNotApplicable
+			logOptions.Charged = &charged
+			logOptions.RefundState = "not_required"
+		} else {
+			logOptions.BillingState = service.RelayErrorBillingPreConsumed
+			if info.Billing.NeedsRefund() {
+				logOptions.RefundState = "pending"
+			}
+		}
+	}
+	service.RecordRelayErrorLog(c, err, logOptions)
 
 }
 
@@ -711,7 +739,7 @@ func RelayTask(c *gin.Context) {
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
+				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode), relayInfo)
 		}
 
 		if !shouldRetryTaskRelay(c, channel, taskErr, common.RetryTimes-retryParam.GetRetry()) {

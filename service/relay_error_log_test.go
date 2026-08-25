@@ -100,6 +100,41 @@ func TestRecordRelayErrorLogMarksUpstreamCallExplicitly(t *testing.T) {
 	require.Equal(t, "upstream_server", other["error_class"])
 }
 
+func TestRecordRelayErrorLogPersistsOnlyNormalizedLifecycleStates(t *testing.T) {
+	truncate(t)
+	previous := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previous })
+
+	c := relayErrorLogTestContext()
+	accepted := true
+	relayErr := types.NewErrorWithStatusCode(errors.New("provider body must not be stored"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
+	require.True(t, RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
+		Stage:            "upstream",
+		UpstreamCalled:   true,
+		UpstreamAccepted: &accepted,
+		TaskState:        "failed",
+		RefundState:      "pending",
+		BillingState:     RelayErrorBillingPreConsumed,
+	}))
+
+	var row model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
+	other := map[string]interface{}{}
+	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
+	require.Equal(t, "accepted", other["upstream_state"])
+	require.Equal(t, true, other["upstream_accepted_known"])
+	require.Equal(t, true, other["upstream_accepted"])
+	require.Equal(t, "failed", other["task_state"])
+	require.Equal(t, "pending", other["refund_state"])
+	require.Equal(t, "pre_consumed", other["billing_state"])
+	require.Equal(t, false, other["charge_known"])
+	require.NotContains(t, row.Other, "provider body")
+
+	require.Equal(t, "unknown", normalizeRelayTaskState("https://supplier.invalid/task?token=secret"))
+	require.Equal(t, "unknown", normalizeRelayRefundState("refund secret body"))
+}
+
 func TestRecordRelayErrorLogStoresOnlyAllowlistedImage2ResponseFailure(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled
