@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"math"
+	"net/http"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,6 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
+
+var relayErrorClassificationToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
 
 const (
 	relayErrorLogRecordedKey          = "relay_error_log_recorded_error"
@@ -98,6 +102,68 @@ func boundedRelayErrorLogText(value string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "...[truncated]"
 }
 
+func safeRelayErrorClassificationToken(value string) string {
+	value = strings.TrimSpace(value)
+	if !relayErrorClassificationToken.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
+func relayErrorClass(err *types.NewAPIError) string {
+	if err == nil {
+		return "unknown"
+	}
+	switch err.GetErrorCode() {
+	case types.ErrorCodeDoRequestFailed:
+		return "transport"
+	case types.ErrorCodeUpstreamImageMissing, types.ErrorCodeUpstreamImageInvalid:
+		return "upstream_output"
+	case types.ErrorCodePromptBlocked:
+		return "content_safety"
+	}
+	switch err.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "upstream_auth"
+	case http.StatusNotFound:
+		return "upstream_not_found"
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return "upstream_timeout"
+	case http.StatusTooManyRequests:
+		return "upstream_rate_limit"
+	}
+	if err.StatusCode >= 500 && err.StatusCode <= 599 {
+		return "upstream_server"
+	}
+	if err.StatusCode >= 400 && err.StatusCode <= 499 {
+		return "request_rejected"
+	}
+	return "unknown"
+}
+
+func safeProviderErrorDimensions(err *types.NewAPIError) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+	var errorType, errorCode string
+	switch relayErr := err.RelayError.(type) {
+	case types.OpenAIError:
+		errorType = safeRelayErrorClassificationToken(relayErr.Type)
+		if code, ok := relayErr.Code.(string); ok {
+			errorCode = safeRelayErrorClassificationToken(code)
+		}
+	case types.ClaudeError:
+		errorType = safeRelayErrorClassificationToken(relayErr.Type)
+	}
+	if errorType == "" {
+		errorType = safeRelayErrorClassificationToken(string(err.GetErrorType()))
+	}
+	if errorCode == "" {
+		errorCode = safeRelayErrorClassificationToken(string(err.GetErrorCode()))
+	}
+	return errorType, errorCode
+}
+
 func normalizeRelayErrorBillingState(state RelayErrorBillingState) RelayErrorBillingState {
 	switch state {
 	case RelayErrorBillingNotStarted, RelayErrorBillingNotApplicable, RelayErrorBillingPreConsumed:
@@ -155,6 +221,14 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	other["error_stage"] = options.Stage
 	other["error_type"] = err.GetErrorType()
 	other["error_code"] = err.GetErrorCode()
+	other["error_class"] = relayErrorClass(err)
+	providerErrorType, providerErrorCode := safeProviderErrorDimensions(err)
+	if providerErrorType != "" {
+		other["provider_error_type"] = providerErrorType
+	}
+	if providerErrorCode != "" {
+		other["provider_error_code"] = providerErrorCode
+	}
 	other["status_code"] = err.StatusCode
 	other["channel_id"] = channelID
 	other["channel_name"] = channelName

@@ -97,6 +97,44 @@ func TestRecordRelayErrorLogMarksUpstreamCallExplicitly(t *testing.T) {
 	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
 	require.Equal(t, true, other["upstream_called"])
 	require.Equal(t, float64(19), other["channel_id"])
+	require.Equal(t, "upstream_server", other["error_class"])
+}
+
+func TestRecordRelayErrorLogStoresOnlySafeProviderClassification(t *testing.T) {
+	truncate(t)
+	previous := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previous })
+
+	c := relayErrorLogTestContext()
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Message: "prompt=customer-secret token=provider-secret",
+		Type:    "server_error",
+		Code:    "capacity_exhausted",
+	}, http.StatusBadGateway)
+	require.True(t, RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
+		Stage:          "upstream",
+		UpstreamCalled: true,
+	}))
+
+	var row model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
+	other := map[string]interface{}{}
+	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
+	require.Equal(t, "server_error", other["provider_error_type"])
+	require.Equal(t, "capacity_exhausted", other["provider_error_code"])
+	require.Equal(t, "upstream_server", other["error_class"])
+	require.NotContains(t, row.Content, "customer-secret")
+	require.NotContains(t, row.Other, "customer-secret")
+	require.NotContains(t, row.Other, "provider-secret")
+
+	unsafe := types.WithOpenAIError(types.OpenAIError{
+		Message: "do not persist",
+		Type:    "https://supplier.example/error?token=secret",
+		Code:    "bad code with secret data",
+	}, http.StatusBadGateway)
+	require.Equal(t, "", safeRelayErrorClassificationToken(unsafe.RelayError.(types.OpenAIError).Type))
+	require.Equal(t, "", safeRelayErrorClassificationToken(unsafe.RelayError.(types.OpenAIError).Code.(string)))
 }
 
 func TestRecordRelayErrorLogRespectsNoRecordOption(t *testing.T) {
