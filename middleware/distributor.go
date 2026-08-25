@@ -118,7 +118,11 @@ func Distribute() func(c *gin.Context) {
 			// Select a channel for the user
 			// check token model mapping
 			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
+			// Public task reads identify the task in the URL and legitimately have
+			// no request model. Only GET fetches receive this compatibility path;
+			// POST, remix, and unrelated endpoints remain model-limited.
+			readOnlyTaskFetch := isReadOnlyTaskFetchRequest(c.Request.Method, c.Request.URL.Path) && modelRequest.Model == ""
+			if modelLimitEnable && !readOnlyTaskFetch {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
@@ -312,6 +316,25 @@ func isImageTaskPath(path string) bool {
 		strings.HasPrefix(path, "/v1/images/batches/") ||
 		path == "/pg/images/jobs/generations" ||
 		strings.HasPrefix(path, "/pg/images/jobs/")
+}
+
+func isReadOnlyTaskFetchRequest(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	if rest, ok := strings.CutPrefix(path, "/v1/videos/"); ok {
+		parts := strings.Split(rest, "/")
+		return parts[0] != "" && (len(parts) == 1 || (len(parts) == 2 && parts[1] == "content"))
+	}
+	return hasExactlyOnePathSegment(path, "/v1/video/generations/") ||
+		hasExactlyOnePathSegment(path, "/v1/images/generations/jobs/") ||
+		hasExactlyOnePathSegment(path, "/v1/images/batches/") ||
+		hasExactlyOnePathSegment(path, "/pg/images/jobs/")
+}
+
+func hasExactlyOnePathSegment(path, prefix string) bool {
+	rest, ok := strings.CutPrefix(path, prefix)
+	return ok && rest != "" && !strings.Contains(rest, "/")
 }
 
 func getPlaygroundGroup(c *gin.Context) (string, error) {
