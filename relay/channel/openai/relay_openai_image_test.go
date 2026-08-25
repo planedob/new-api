@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -149,15 +150,24 @@ func TestOpenaiHandlerWithUsageRejectsEmptyImageDataBeforeWritingResponse(t *tes
 
 func TestOpenaiHandlerWithUsageClassifiesTextOnlyImageResponseWithoutLeakingBody(t *testing.T) {
 	const providerText = "sensitive provider text that must not be reflected"
-	for _, responseBody := range []string{
-		providerText,
-		`{"text":"` + providerText + `"}`,
-		`{"data":[{"revised_prompt":"` + providerText + `"}]}`,
+	for _, test := range []struct {
+		name           string
+		responseBody   string
+		classification string
+		errorCode      types.ErrorCode
+	}{
+		{name: "invalid json", responseBody: providerText, classification: "invalid_json", errorCode: types.ErrorCodeUpstreamImageInvalid},
+		{name: "text field", responseBody: `{"text":"` + providerText + `"}`, classification: "text_only", errorCode: types.ErrorCodeUpstreamImageMissing},
+		{name: "choices", responseBody: `{"choices":[{"message":{"content":"` + providerText + `"}}]}`, classification: "text_only", errorCode: types.ErrorCodeUpstreamImageMissing},
+		{name: "empty data", responseBody: `{"data":[]}`, classification: "empty_data", errorCode: types.ErrorCodeUpstreamImageMissing},
+		{name: "empty fields", responseBody: `{"data":[{"revised_prompt":"` + providerText + `"}]}`, classification: "empty_image_fields", errorCode: types.ErrorCodeUpstreamImageMissing},
+		{name: "invalid schema", responseBody: `{"data":{"url":"https://example.invalid/image.png"}}`, classification: "invalid_schema", errorCode: types.ErrorCodeUpstreamImageInvalid},
+		{name: "valid json wrong top-level schema", responseBody: `[]`, classification: "invalid_schema", errorCode: types.ErrorCodeUpstreamImageInvalid},
 	} {
-		t.Run(responseBody, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			context, _ := gin.CreateTestContext(recorder)
-			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(responseBody))}
+			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.responseBody))}
 
 			usage, apiErr := OpenaiHandlerWithUsage(context, &relaycommon.RelayInfo{
 				RelayMode:       relayconstant.RelayModeImagesEdits,
@@ -170,11 +180,11 @@ func TestOpenaiHandlerWithUsageClassifiesTextOnlyImageResponseWithoutLeakingBody
 			if strings.Contains(apiErr.Error(), providerText) {
 				t.Fatalf("provider body leaked into error: %q", apiErr.Error())
 			}
-			if responseBody == providerText && apiErr.GetErrorCode() != types.ErrorCodeUpstreamImageInvalid {
-				t.Fatalf("plain text error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeUpstreamImageInvalid)
+			if apiErr.GetErrorCode() != test.errorCode {
+				t.Fatalf("error code = %q, want %q", apiErr.GetErrorCode(), test.errorCode)
 			}
-			if responseBody != providerText && apiErr.GetErrorCode() != types.ErrorCodeUpstreamImageMissing {
-				t.Fatalf("JSON without image error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeUpstreamImageMissing)
+			if got := service.Image2ResponseFailure(context); got != test.classification {
+				t.Fatalf("classification = %q, want %q", got, test.classification)
 			}
 			if recorder.Body.Len() != 0 {
 				t.Fatalf("text-only response was written to client: %q", recorder.Body.String())

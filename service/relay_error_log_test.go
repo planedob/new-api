@@ -100,6 +100,40 @@ func TestRecordRelayErrorLogMarksUpstreamCallExplicitly(t *testing.T) {
 	require.Equal(t, "upstream_server", other["error_class"])
 }
 
+func TestRecordRelayErrorLogStoresOnlyAllowlistedImage2ResponseFailure(t *testing.T) {
+	truncate(t)
+	previous := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previous })
+
+	c := relayErrorLogTestContext()
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("provider body and image material must not be persisted"),
+		types.ErrorCodeUpstreamImageMissing,
+		http.StatusBadGateway,
+	)
+	recorded := RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
+		Stage:                 "upstream",
+		UpstreamCalled:        true,
+		Image2ResponseFailure: "text_only",
+	})
+	require.True(t, recorded)
+
+	var row model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
+	other := map[string]interface{}{}
+	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
+	require.Equal(t, "upstream_response", other["failure_scope"])
+	require.Equal(t, "text_only", other["image2_response_failure"])
+	require.Equal(t, "images", other["request_route"])
+	require.NotContains(t, other, "request_path")
+	require.NotContains(t, row.Content, "provider body")
+	require.NotContains(t, row.Other, "image material")
+
+	SetImage2ResponseFailure(c, "https://supplier.invalid/?token=secret")
+	require.Empty(t, Image2ResponseFailure(c))
+}
+
 func TestRecordRelayErrorLogStoresOnlySafeProviderClassification(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled

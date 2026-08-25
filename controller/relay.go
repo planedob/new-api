@@ -543,9 +543,10 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	}
 
 	service.RecordRelayErrorLog(c, err, service.RelayErrorLogOptions{
-		Stage:          "upstream",
-		Channel:        &channelError,
-		UpstreamCalled: common.GetContextKeyBool(c, constant.ContextKeyUpstreamCalled),
+		Stage:                 "upstream",
+		Channel:               &channelError,
+		UpstreamCalled:        common.GetContextKeyBool(c, constant.ContextKeyUpstreamCalled),
+		Image2ResponseFailure: service.Image2ResponseFailure(c),
 	})
 
 }

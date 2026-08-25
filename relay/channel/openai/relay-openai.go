@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -568,6 +569,7 @@ func markOpenAIImageUpstreamAccepted(info *relaycommon.RelayInfo, resp *http.Res
 
 func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
+	service.SetImage2ResponseFailure(c, "")
 	// A 2xx Image2 response is already accepted upstream. Mark this before
 	// body reads and local parsing so any later error cannot replay a
 	// non-idempotent generation/edit request on another channel.
@@ -579,7 +581,8 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	}
 
 	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
-		if errorCode, err := validateImageResponse(responseBody); err != nil {
+		if classification, errorCode, err := validateImageResponse(responseBody); err != nil {
+			service.SetImage2ResponseFailure(c, classification)
 			return nil, types.NewOpenAIError(err, errorCode, http.StatusBadGateway)
 		}
 	}
@@ -614,19 +617,56 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 // validateImageResponse rejects an HTTP-success response that does not contain
 // an image result. It must run before the response is written to the client so
 // ImageHelper can avoid treating an empty response as a billable success.
-func validateImageResponse(responseBody []byte) (types.ErrorCode, error) {
-	var imageResponse dto.ImageResponse
-	if err := common.Unmarshal(responseBody, &imageResponse); err != nil {
+func validateImageResponse(responseBody []byte) (string, types.ErrorCode, error) {
+	if !json.Valid(responseBody) {
 		// Never include the provider response body in this error. It can contain
 		// generated text, prompt fragments, URLs, or other customer material.
-		return types.ErrorCodeUpstreamImageInvalid, fmt.Errorf("upstream image response was not valid JSON")
+		return "invalid_json", types.ErrorCodeUpstreamImageInvalid, fmt.Errorf("upstream image response was not valid JSON")
 	}
-	for _, item := range imageResponse.Data {
+	var envelope map[string]json.RawMessage
+	if err := common.Unmarshal(responseBody, &envelope); err != nil || envelope == nil {
+		return "invalid_schema", types.ErrorCodeUpstreamImageInvalid, fmt.Errorf("upstream image response did not match the expected schema")
+	}
+
+	rawData, hasData := envelope["data"]
+	if !hasData {
+		if hasTextOnlyImageOutput(envelope) {
+			return "text_only", types.ErrorCodeUpstreamImageMissing, fmt.Errorf("upstream returned no usable image; local billing settlement was not completed")
+		}
+		return "invalid_schema", types.ErrorCodeUpstreamImageInvalid, fmt.Errorf("upstream image response did not match the expected schema")
+	}
+	var imageData []dto.ImageData
+	if err := common.Unmarshal(rawData, &imageData); err != nil {
+		return "invalid_schema", types.ErrorCodeUpstreamImageInvalid, fmt.Errorf("upstream image response did not match the expected schema")
+	}
+	if len(imageData) == 0 {
+		return "empty_data", types.ErrorCodeUpstreamImageMissing, fmt.Errorf("upstream returned no usable image; local billing settlement was not completed")
+	}
+	for _, item := range imageData {
 		if strings.TrimSpace(item.Url) != "" || strings.TrimSpace(item.B64Json) != "" {
-			return "", nil
+			return "", "", nil
 		}
 	}
-	return types.ErrorCodeUpstreamImageMissing, fmt.Errorf("upstream returned no usable image; local billing settlement was not completed")
+	return "empty_image_fields", types.ErrorCodeUpstreamImageMissing, fmt.Errorf("upstream returned no usable image; local billing settlement was not completed")
+}
+
+func hasTextOnlyImageOutput(envelope map[string]json.RawMessage) bool {
+	for _, key := range []string{"text", "output_text"} {
+		raw, ok := envelope[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if common.Unmarshal(raw, &value) == nil && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	rawChoices, ok := envelope["choices"]
+	if !ok {
+		return false
+	}
+	var choices []json.RawMessage
+	return common.Unmarshal(rawChoices, &choices) == nil && len(choices) > 0
 }
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {

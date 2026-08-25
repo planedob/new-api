@@ -22,6 +22,7 @@ const (
 	relayErrorLogRecordedKey          = "relay_error_log_recorded_error"
 	relayErrorLogRecordedAnyKey       = "relay_error_log_recorded_any"
 	relayErrorLogPersistenceFailedKey = "relay_error_log_persistence_failed"
+	image2ResponseFailureContextKey   = "image2_upstream_response_failure"
 	relayErrorEventVersion            = 1
 	maxRelayErrorLogDimensionRunes    = 128
 	maxRelayErrorLogExtraRunes        = 512
@@ -40,15 +41,48 @@ const (
 // when the request never reached an upstream; such failures are still useful
 // operational evidence and are recorded with channel_id=0.
 type RelayErrorLogOptions struct {
-	Stage          string
-	Channel        *types.ChannelError
-	ModelName      string
-	Group          string
-	UpstreamCalled bool
-	BillingState   RelayErrorBillingState
-	Charged        *bool
-	Image2         *Image2RequestCapability
-	Extra          map[string]interface{}
+	Stage                 string
+	Channel               *types.ChannelError
+	ModelName             string
+	Group                 string
+	UpstreamCalled        bool
+	BillingState          RelayErrorBillingState
+	Charged               *bool
+	Image2                *Image2RequestCapability
+	Image2ResponseFailure string
+	Extra                 map[string]interface{}
+}
+
+var image2ResponseFailureAllowlist = map[string]struct{}{
+	"invalid_json":       {},
+	"text_only":          {},
+	"empty_data":         {},
+	"empty_image_fields": {},
+	"invalid_schema":     {},
+}
+
+// SetImage2ResponseFailure stores only a fixed, non-sensitive classification.
+// Provider bodies, image data, prompts, URLs, and credentials never enter the
+// request context through this path.
+func SetImage2ResponseFailure(c *gin.Context, classification string) {
+	if c == nil {
+		return
+	}
+	if _, ok := image2ResponseFailureAllowlist[classification]; !ok {
+		classification = ""
+	}
+	c.Set(image2ResponseFailureContextKey, classification)
+}
+
+func Image2ResponseFailure(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	classification := c.GetString(image2ResponseFailureContextKey)
+	if _, ok := image2ResponseFailureAllowlist[classification]; !ok {
+		return ""
+	}
+	return classification
 }
 
 var relayErrorLogExtraAllowlist = map[string]struct{}{
@@ -214,7 +248,11 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	// Image2 pre-route evidence intentionally omits the URL because query
 	// strings can carry client material. Existing non-Image2 diagnostics keep
 	// their established request_path field.
-	if options.Image2 == nil && c.Request != nil && c.Request.URL != nil {
+	image2ResponseFailure := options.Image2ResponseFailure
+	if _, ok := image2ResponseFailureAllowlist[image2ResponseFailure]; !ok {
+		image2ResponseFailure = ""
+	}
+	if options.Image2 == nil && image2ResponseFailure == "" && c.Request != nil && c.Request.URL != nil {
 		other["request_path"] = c.Request.URL.Path
 	}
 	other["event_version"] = relayErrorEventVersion
@@ -251,6 +289,11 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		} else {
 			other["charge_known"] = false
 		}
+	}
+	if image2ResponseFailure != "" {
+		other["failure_scope"] = "upstream_response"
+		other["request_route"] = "images"
+		other["image2_response_failure"] = image2ResponseFailure
 	}
 	for key, value := range safeRelayErrorLogExtra(options.Extra) {
 		other[key] = value
