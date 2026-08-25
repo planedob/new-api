@@ -35,10 +35,14 @@ export const createLatestInputStore = (initialInputs = {}) => {
 
 export const getEnabledImageSources = (inputs = {}, attachment = null) => {
   const imageUrls = (inputs.imageEnabled ? inputs.imageUrls || [] : []).filter(
-    (source) => String(source).trim() !== '',
+    (source) => typeof source === 'string' && source.trim() !== '',
   );
   return imageUrls.length > 0 ? imageUrls : attachment ? [attachment] : [];
 };
+
+export const countValidImageSources = (sources = []) =>
+  sources.filter((source) => typeof source === 'string' && source.trim() !== '')
+    .length;
 
 export const createRequestAbortRegistry = () => {
   let activeController = null;

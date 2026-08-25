@@ -38,6 +38,13 @@ const ImageRequestControls = ({ inputs, onInputChange, disabled = false }) => {
           'Image2 生成使用 /images/generations；粘贴参考图后使用 /images/edits。',
         )}
       </Typography.Text>
+      {inputs.imageEnabled && (
+        <Typography.Text className='text-xs text-orange-600 block'>
+          {t(
+            '图生图会原样发送所选尺寸和质量，不会自动降级；上游未返回图片时本次请求会失败、不会自动重试，并进入失败退款流程。',
+          )}
+        </Typography.Text>
+      )}
 
       <div>
         <div className='flex items-center gap-2 mb-2'>

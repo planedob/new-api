@@ -22,6 +22,7 @@ import { Input, Typography, Button, Switch } from '@douyinfe/semi-ui';
 import { IconFile } from '@douyinfe/semi-icons';
 import { FileText, Plus, X, Image, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { countValidImageSources } from '../../helpers/playgroundRequestState';
 
 const ImageUrlInput = ({
   imageUrls,
@@ -32,6 +33,7 @@ const ImageUrlInput = ({
 }) => {
   const { t } = useTranslation();
   const fileInputRef = useRef(null);
+  const validImageCount = countValidImageSources(imageUrls);
   const handleAddImageUrl = () => {
     const newUrls = [...imageUrls, ''];
     onImageUrlsChange(newUrls);
@@ -130,15 +132,15 @@ const ImageUrlInput = ({
             ? t('图片功能在自定义请求体模式下不可用')
             : t('启用后可添加图片URL进行多模态对话')}
         </Typography.Text>
-      ) : imageUrls.length === 0 ? (
+      ) : validImageCount === 0 ? (
         <Typography.Text className='text-xs text-gray-500 mb-2 block'>
           {disabled
             ? t('图片功能在自定义请求体模式下不可用')
-            : t('点击 + 按钮添加图片URL进行多模态对话')}
+            : t('尚未添加有效图片；请粘贴图片地址或上传图片')}
         </Typography.Text>
       ) : (
         <Typography.Text className='text-xs text-gray-500 mb-2 block'>
-          {t('已添加')} {imageUrls.length} {t('张图片')}
+          {t('已添加')} {validImageCount} {t('张图片')}
           {disabled ? ` (${t('自定义模式下不可用')})` : ''}
         </Typography.Text>
       )}

@@ -139,8 +139,47 @@ func TestOpenaiHandlerWithUsageRejectsEmptyImageDataBeforeWritingResponse(t *tes
 	if usage != nil || apiErr == nil {
 		t.Fatalf("empty image response = usage %#v, error %#v; want error before success", usage, apiErr)
 	}
+	if apiErr.GetErrorCode() != types.ErrorCodeUpstreamImageMissing {
+		t.Fatalf("empty image error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeUpstreamImageMissing)
+	}
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("empty image response was written to client: %q", recorder.Body.String())
+	}
+}
+
+func TestOpenaiHandlerWithUsageClassifiesTextOnlyImageResponseWithoutLeakingBody(t *testing.T) {
+	const providerText = "sensitive provider text that must not be reflected"
+	for _, responseBody := range []string{
+		providerText,
+		`{"text":"` + providerText + `"}`,
+		`{"data":[{"revised_prompt":"` + providerText + `"}]}`,
+	} {
+		t.Run(responseBody, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			response := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(responseBody))}
+
+			usage, apiErr := OpenaiHandlerWithUsage(context, &relaycommon.RelayInfo{
+				RelayMode:       relayconstant.RelayModeImagesEdits,
+				OriginModelName: "gpt-image-2",
+				ChannelMeta:     &relaycommon.ChannelMeta{},
+			}, response)
+			if usage != nil || apiErr == nil {
+				t.Fatalf("text-only image response = usage %#v, error %#v; want classified failure", usage, apiErr)
+			}
+			if strings.Contains(apiErr.Error(), providerText) {
+				t.Fatalf("provider body leaked into error: %q", apiErr.Error())
+			}
+			if responseBody == providerText && apiErr.GetErrorCode() != types.ErrorCodeUpstreamImageInvalid {
+				t.Fatalf("plain text error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeUpstreamImageInvalid)
+			}
+			if responseBody != providerText && apiErr.GetErrorCode() != types.ErrorCodeUpstreamImageMissing {
+				t.Fatalf("JSON without image error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeUpstreamImageMissing)
+			}
+			if recorder.Body.Len() != 0 {
+				t.Fatalf("text-only response was written to client: %q", recorder.Body.String())
+			}
+		})
 	}
 }
 

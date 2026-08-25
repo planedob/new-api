@@ -578,16 +578,16 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 
+	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
+		if errorCode, err := validateImageResponse(responseBody); err != nil {
+			return nil, types.NewOpenAIError(err, errorCode, http.StatusBadGateway)
+		}
+	}
+
 	var usageResp dto.SimpleResponse
 	err = common.Unmarshal(responseBody, &usageResp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-	}
-
-	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
-		if err := validateImageResponse(responseBody); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
-		}
 	}
 
 	// 写入新的 response body
@@ -614,17 +614,19 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 // validateImageResponse rejects an HTTP-success response that does not contain
 // an image result. It must run before the response is written to the client so
 // ImageHelper can avoid treating an empty response as a billable success.
-func validateImageResponse(responseBody []byte) error {
+func validateImageResponse(responseBody []byte) (types.ErrorCode, error) {
 	var imageResponse dto.ImageResponse
 	if err := common.Unmarshal(responseBody, &imageResponse); err != nil {
-		return fmt.Errorf("invalid image response: %w", err)
+		// Never include the provider response body in this error. It can contain
+		// generated text, prompt fragments, URLs, or other customer material.
+		return types.ErrorCodeUpstreamImageInvalid, fmt.Errorf("upstream image response was not valid JSON")
 	}
 	for _, item := range imageResponse.Data {
 		if strings.TrimSpace(item.Url) != "" || strings.TrimSpace(item.B64Json) != "" {
-			return nil
+			return "", nil
 		}
 	}
-	return fmt.Errorf("image response contains no usable image data")
+	return types.ErrorCodeUpstreamImageMissing, fmt.Errorf("upstream returned no usable image; local billing settlement was not completed")
 }
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {

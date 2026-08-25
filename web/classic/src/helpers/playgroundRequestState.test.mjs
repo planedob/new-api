@@ -21,10 +21,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  countValidImageSources,
   createLatestInputStore,
   createRequestAbortRegistry,
   getEnabledImageSources,
 } from './playgroundRequestState.js';
+
+test('blank image inputs are not counted as attached images', () => {
+  assert.equal(countValidImageSources(['', '   ', null]), 0);
+  assert.equal(
+    countValidImageSources(['', 'data:image/png;base64,iVBORw0KGgo=', '   ']),
+    1,
+  );
+});
 
 test('latest input store exposes pasted images to a previously captured sender', () => {
   const store = createLatestInputStore({
