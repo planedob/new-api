@@ -244,6 +244,12 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, info
 	// wire contract untouched.
 	if a.ChannelType == constant.ChannelTypeSecureSkillNativeH3 && info != nil && strings.TrimSpace(info.PublicTaskID) != "" {
 		req.Header.Set("Idempotency-Key", "aibuff-"+strings.TrimSpace(info.PublicTaskID))
+		// Go's Transport treats Idempotency-Key POSTs as replayable when
+		// Request.GetBody is available. H3 creation is a single-submit
+		// boundary, so do not let redirects or connection reuse create a
+		// second POST. The provider idempotency key still protects an
+		// explicitly retried request at the upstream boundary.
+		req.GetBody = nil
 	}
 	return nil
 }

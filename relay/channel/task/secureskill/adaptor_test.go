@@ -141,6 +141,9 @@ func TestBuildRequestHeaderAddsIdempotencyKeyOnlyForSecureSkillNativeH3(t *testi
 			if got := req.Header.Get("Idempotency-Key"); got != tt.want {
 				t.Fatalf("Idempotency-Key = %q, want %q", got, tt.want)
 			}
+			if tt.channelType == constant.ChannelTypeSecureSkillNativeH3 && req.GetBody != nil {
+				t.Fatal("native H3 request must not expose GetBody to the HTTP client")
+			}
 		})
 	}
 }
@@ -186,6 +189,54 @@ func TestNativeH3CreateSendsOneDeterministicIdempotencyKey(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || requests != 1 {
 		t.Fatalf("status=%d requests=%d, want 200/1", resp.StatusCode, requests)
+	}
+}
+
+func TestNativeH3CreateDoesNotFollowBodyPreservingRedirect(t *testing.T) {
+	service.InitHttpClient()
+	redirects := 0
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/videos":
+			posts++
+			w.Header().Set("Location", "/redirect-target")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		case "/redirect-target":
+			redirects++
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	info := testInfoForType(server.URL, constant.ChannelTypeSecureSkillNativeH3)
+	adaptor := &TaskAdaptor{}
+	adaptor.Init(info)
+	ctx := jsonContext(`{"model":"minimax-h3","prompt":"move","images":["https://example.test/input.png"],"duration":5}`)
+	if taskErr := adaptor.ValidateRequestAndSetAction(ctx, info); taskErr != nil {
+		t.Fatalf("validate: %v", taskErr)
+	}
+	body, err := adaptor.BuildRequestBody(ctx, info)
+	if err != nil {
+		t.Fatalf("BuildRequestBody() error = %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if err := adaptor.BuildRequestHeader(ctx, req, info); err != nil {
+		t.Fatalf("BuildRequestHeader() error = %v", err)
+	}
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want 307", resp.StatusCode)
+	}
+	if posts != 1 || redirects != 0 {
+		t.Fatalf("POSTs=%d redirects=%d, want 1/0", posts, redirects)
 	}
 }
 
