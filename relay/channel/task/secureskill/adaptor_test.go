@@ -89,6 +89,7 @@ func TestParseTaskResultAcceptsSecureSkillDurationEncodings(t *testing.T) {
 		{name: "integral decimal number", body: `{"status":"completed","duration":5.0}`},
 		{name: "numeric string", body: `{"status":"completed","duration":"5"}`},
 		{name: "numeric decimal string", body: `{"status":"completed","duration":"5.0"}`},
+		{name: "provider seconds suffix", body: `{"status":"completed","duration":"6s","seconds":"6"}`},
 		{name: "integral exponent", body: `{"status":"completed","duration":50e-1}`},
 		{name: "null", body: `{"status":"completed","duration":null}`},
 	} {
@@ -110,11 +111,81 @@ func TestParseTaskResultRejectsInvalidSecureSkillDuration(t *testing.T) {
 		`{"status":"completed","duration":5.0000000000000001}`,
 		`{"status":"completed","duration":"5e-1"}`,
 		`{"status":"completed","duration":"01"}`,
+		`{"status":"completed","duration":"6seconds"}`,
 		`{"status":"completed","duration":false}`,
 	} {
 		if _, err := adaptor.ParseTaskResult([]byte(body)); err == nil {
 			t.Fatalf("ParseTaskResult(%s) unexpectedly succeeded", body)
 		}
+	}
+}
+
+func TestBuildRequestHeaderAddsIdempotencyKeyOnlyForSecureSkillNativeH3(t *testing.T) {
+	tests := []struct {
+		name        string
+		channelType int
+		want        string
+	}{
+		{name: "native H3", channelType: constant.ChannelTypeSecureSkillNativeH3, want: "aibuff-task_public"},
+		{name: "legacy ZZone contract", channelType: constant.ChannelTypeSecureSkill, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := testInfoForType("https://upstream.invalid", tt.channelType)
+			adaptor := &TaskAdaptor{}
+			adaptor.Init(info)
+			req := httptest.NewRequest(http.MethodPost, "https://upstream.invalid/v1/videos", nil)
+			if err := adaptor.BuildRequestHeader(nil, req, info); err != nil {
+				t.Fatalf("BuildRequestHeader() error = %v", err)
+			}
+			if got := req.Header.Get("Idempotency-Key"); got != tt.want {
+				t.Fatalf("Idempotency-Key = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeH3CreateSendsOneDeterministicIdempotencyKey(t *testing.T) {
+	service.InitHttpClient()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/videos" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		requests++
+		if got := r.Header.Get("Idempotency-Key"); got != "aibuff-task_public" {
+			t.Fatalf("Idempotency-Key = %q, want aibuff-task_public", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"h3-task-1","status":"queued"}`)
+	}))
+	defer server.Close()
+
+	info := testInfoForType(server.URL, constant.ChannelTypeSecureSkillNativeH3)
+	adaptor := &TaskAdaptor{}
+	adaptor.Init(info)
+	ctx := jsonContext(`{"model":"minimax-h3","prompt":"move","images":["https://example.test/input.png"],"duration":5}`)
+	if taskErr := adaptor.ValidateRequestAndSetAction(ctx, info); taskErr != nil {
+		t.Fatalf("validate: %v", taskErr)
+	}
+	body, err := adaptor.BuildRequestBody(ctx, info)
+	if err != nil {
+		t.Fatalf("BuildRequestBody() error = %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if err := adaptor.BuildRequestHeader(ctx, req, info); err != nil {
+		t.Fatalf("BuildRequestHeader() error = %v", err)
+	}
+	resp, err := service.GetHttpClient().Do(req)
+	if err != nil {
+		t.Fatalf("send request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || requests != 1 {
+		t.Fatalf("status=%d requests=%d, want 200/1", resp.StatusCode, requests)
 	}
 }
 

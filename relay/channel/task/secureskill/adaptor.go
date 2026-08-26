@@ -117,6 +117,13 @@ func (d *h3Duration) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("invalid minimax-h3 duration: %w", err)
 		}
 		raw = strings.TrimSpace(value)
+		// SecureSkill documents completed task responses using values such as
+		// "6s". This is response-only compatibility: incoming client request
+		// validation remains numeric and therefore cannot silently change a
+		// requested duration.
+		if strings.HasSuffix(raw, "s") {
+			raw = strings.TrimSuffix(raw, "s")
+		}
 	}
 	if raw == "" {
 		return fmt.Errorf("invalid minimax-h3 duration: empty string")
@@ -227,10 +234,17 @@ func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) 
 	return buildVideoURL(a.baseURL, ""), nil
 }
 
-func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *relaycommon.RelayInfo) error {
+func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
+	// Native SecureSkill accepts Idempotency-Key on task creation. Bind it to
+	// the pre-generated public task ID so a transport ambiguity cannot create
+	// a second upstream task for the same Aibuff request. Keep the legacy ZZone
+	// wire contract untouched.
+	if a.ChannelType == constant.ChannelTypeSecureSkillNativeH3 && info != nil && strings.TrimSpace(info.PublicTaskID) != "" {
+		req.Header.Set("Idempotency-Key", "aibuff-"+strings.TrimSpace(info.PublicTaskID))
+	}
 	return nil
 }
 
