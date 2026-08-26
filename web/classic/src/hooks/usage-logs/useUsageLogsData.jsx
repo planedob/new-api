@@ -535,6 +535,51 @@ export const useLogsData = () => {
           value: other.request_path,
         });
       }
+      const hasRelayLifecycle =
+        isAdminUser &&
+        other &&
+        [
+          other.error_stage,
+          other.upstream_called,
+          other.upstream_accepted_known,
+          other.response_written_known,
+          other.retry_known,
+          other.billing_state,
+          other.refund_state,
+        ].some((value) => value !== undefined);
+      if (hasRelayLifecycle) {
+        const formatKnownBoolean = (known, value) => {
+          if (known === false || value === undefined) return t('未知');
+          return value ? t('是') : t('否');
+        };
+        const lifecycleRows = [
+          other.error_stage && `${t('阶段')}: ${other.error_stage}`,
+          other.error_class && `${t('错误分类')}: ${other.error_class}`,
+          other.status_code != null && `${t('上游状态')}: ${other.status_code}`,
+          other.upstream_called !== undefined &&
+            `${t('是否调用上游')}: ${formatKnownBoolean(true, other.upstream_called)}`,
+          other.upstream_accepted_known !== undefined &&
+            `${t('上游是否接受')}: ${formatKnownBoolean(other.upstream_accepted_known, other.upstream_accepted)}`,
+          other.upstream_state && `${t('上游状态机')}: ${other.upstream_state}`,
+          other.response_written_known !== undefined &&
+            `${t('是否已写响应')}: ${formatKnownBoolean(other.response_written_known, other.response_written)}`,
+          other.retry_known !== undefined &&
+            `${t('是否重试')}: ${formatKnownBoolean(other.retry_known, other.retry)}`,
+          other.retry_index != null && `${t('重试序号')}: ${other.retry_index}`,
+          other.billing_state && `${t('计费状态')}: ${other.billing_state}`,
+          other.charge_known !== undefined &&
+            `${t('是否扣费')}: ${formatKnownBoolean(other.charge_known, other.charged)}`,
+          other.refund_state && `${t('退款状态')}: ${other.refund_state}`,
+        ].filter(Boolean);
+        expandDataLocal.push({
+          key: t('中转生命周期'),
+          value: (
+            <div style={{ maxWidth: 600, whiteSpace: 'pre-line', wordBreak: 'break-word', lineHeight: 1.6 }}>
+              {lifecycleRows.join('\n')}
+            </div>
+          ),
+        });
+      }
       if (isAdminUser && other?.stream_status) {
         const ss = other.stream_status;
         const isOk = ss.status === 'ok';

@@ -466,6 +466,27 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
 
+  const hasRelayLifecycle =
+    props.isAdmin &&
+    other != null &&
+    [
+      other.error_stage,
+      other.upstream_called,
+      other.upstream_accepted_known,
+      other.response_written_known,
+      other.retry_known,
+      other.billing_state,
+      other.refund_state,
+    ].some((value) => value !== undefined)
+
+  const formatKnownBoolean = (
+    known: boolean | undefined,
+    value: boolean | undefined
+  ) => {
+    if (known === false || value === undefined) return t('Unknown')
+    return value ? t('Yes') : t('No')
+  }
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -630,6 +651,97 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     </div>
                   </div>
                 </div>
+              </DetailSection>
+            )}
+
+            {/* Relay lifecycle evidence (admin only) */}
+            {hasRelayLifecycle && other && (
+              <DetailSection label={t('Relay Lifecycle')}>
+                {other.error_stage && (
+                  <DetailRow
+                    label={t('Stage')}
+                    value={other.error_stage}
+                    mono
+                  />
+                )}
+                {other.error_class && (
+                  <DetailRow
+                    label={t('Error Class')}
+                    value={other.error_class}
+                    mono
+                  />
+                )}
+                {other.status_code != null && (
+                  <DetailRow
+                    label={t('Upstream Status')}
+                    value={String(other.status_code)}
+                    mono
+                  />
+                )}
+                {other.upstream_called !== undefined && (
+                  <DetailRow
+                    label={t('Upstream Called')}
+                    value={formatKnownBoolean(true, other.upstream_called)}
+                  />
+                )}
+                {other.upstream_accepted_known !== undefined && (
+                  <DetailRow
+                    label={t('Upstream Accepted')}
+                    value={formatKnownBoolean(
+                      other.upstream_accepted_known,
+                      other.upstream_accepted
+                    )}
+                  />
+                )}
+                {other.upstream_state && (
+                  <DetailRow
+                    label={t('Upstream State')}
+                    value={other.upstream_state}
+                    mono
+                  />
+                )}
+                {other.response_written_known !== undefined && (
+                  <DetailRow
+                    label={t('Response Written')}
+                    value={formatKnownBoolean(
+                      other.response_written_known,
+                      other.response_written
+                    )}
+                  />
+                )}
+                {other.retry_known !== undefined && (
+                  <DetailRow
+                    label={t('Retry Decision')}
+                    value={formatKnownBoolean(other.retry_known, other.retry)}
+                  />
+                )}
+                {other.retry_index != null && (
+                  <DetailRow
+                    label={t('Retry Index')}
+                    value={String(other.retry_index)}
+                    mono
+                  />
+                )}
+                {other.billing_state && (
+                  <DetailRow
+                    label={t('Billing State')}
+                    value={other.billing_state}
+                    mono
+                  />
+                )}
+                {other.charge_known !== undefined && (
+                  <DetailRow
+                    label={t('Charged')}
+                    value={formatKnownBoolean(other.charge_known, other.charged)}
+                  />
+                )}
+                {other.refund_state && (
+                  <DetailRow
+                    label={t('Refund State')}
+                    value={other.refund_state}
+                    mono
+                  />
+                )}
               </DetailSection>
             )}
 

@@ -93,6 +93,27 @@ export interface LogOtherData {
   }
   request_path?: string
   request_conversion?: string[]
+  error_stage?: string
+  error_type?: string
+  error_code?: string
+  error_class?: string
+  status_code?: number
+  channel_id?: number
+  channel_name?: string
+  channel_type?: number
+  upstream_called?: boolean
+  upstream_accepted_known?: boolean
+  upstream_accepted?: boolean
+  upstream_state?: string
+  response_written_known?: boolean
+  response_written?: boolean
+  retry_known?: boolean
+  retry?: boolean
+  retry_index?: number
+  billing_state?: string
+  charge_known?: boolean
+  charged?: boolean
+  refund_state?: string
   ws?: boolean
   audio?: boolean
   audio_input?: number

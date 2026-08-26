@@ -47,6 +47,9 @@ type RelayErrorLogOptions struct {
 	Group                 string
 	UpstreamCalled        bool
 	UpstreamAccepted      *bool
+	ResponseWritten       *bool
+	RetryDecision         *bool
+	RetryIndex            int
 	TaskState             string
 	RefundState           string
 	BillingState          RelayErrorBillingState
@@ -307,6 +310,24 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		}
 	}
 	other["upstream_state"] = upstreamState
+	responseWritten := false
+	responseWrittenKnown := false
+	if options.ResponseWritten != nil {
+		responseWritten = *options.ResponseWritten
+		responseWrittenKnown = true
+	} else if c.Writer != nil {
+		responseWritten = c.Writer.Written()
+		responseWrittenKnown = true
+	}
+	other["response_written_known"] = responseWrittenKnown
+	if responseWrittenKnown {
+		other["response_written"] = responseWritten
+	}
+	other["retry_known"] = options.RetryDecision != nil
+	if options.RetryDecision != nil {
+		other["retry"] = *options.RetryDecision
+		other["retry_index"] = options.RetryIndex
+	}
 	other["task_state"] = normalizeRelayTaskState(options.TaskState)
 	other["refund_state"] = normalizeRelayRefundState(options.RefundState)
 	other["billing_state"] = normalizeRelayErrorBillingState(options.BillingState)

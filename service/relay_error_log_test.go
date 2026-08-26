@@ -108,11 +108,16 @@ func TestRecordRelayErrorLogPersistsOnlyNormalizedLifecycleStates(t *testing.T) 
 
 	c := relayErrorLogTestContext()
 	accepted := true
+	responseWritten := false
+	retry := true
 	relayErr := types.NewErrorWithStatusCode(errors.New("provider body must not be stored"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
 	require.True(t, RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
 		Stage:            "upstream",
 		UpstreamCalled:   true,
 		UpstreamAccepted: &accepted,
+		ResponseWritten:  &responseWritten,
+		RetryDecision:    &retry,
+		RetryIndex:       1,
 		TaskState:        "failed",
 		RefundState:      "pending",
 		BillingState:     RelayErrorBillingPreConsumed,
@@ -125,6 +130,11 @@ func TestRecordRelayErrorLogPersistsOnlyNormalizedLifecycleStates(t *testing.T) 
 	require.Equal(t, "accepted", other["upstream_state"])
 	require.Equal(t, true, other["upstream_accepted_known"])
 	require.Equal(t, true, other["upstream_accepted"])
+	require.Equal(t, true, other["response_written_known"])
+	require.Equal(t, false, other["response_written"])
+	require.Equal(t, true, other["retry_known"])
+	require.Equal(t, true, other["retry"])
+	require.Equal(t, float64(1), other["retry_index"])
 	require.Equal(t, "failed", other["task_state"])
 	require.Equal(t, "pending", other["refund_state"])
 	require.Equal(t, "pre_consumed", other["billing_state"])
