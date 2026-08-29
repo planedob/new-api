@@ -86,6 +86,37 @@ func TestBuildRelayErrorEventRejectsProviderControlledClassification(t *testing.
 	require.Equal(t, "openai_error", event["error_type"])
 }
 
+func TestRecordRelayErrorLogRedactsProviderControlledCodeEndToEnd(t *testing.T) {
+	truncate(t)
+	previous := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previous })
+
+	c := relayErrorLogTestContext()
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Message: "provider response must not enter application logs",
+		Type:    "server_error",
+		Code:    "https://provider.invalid/secret?token=must-not-enter-log",
+	}, http.StatusBadGateway)
+	require.True(t, RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
+		Stage:          "upstream",
+		UpstreamCalled: true,
+	}))
+
+	var row model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
+	require.Contains(t, row.Content, "error_code=unclassified_error")
+	require.NotContains(t, row.Content, "provider.invalid")
+	require.NotContains(t, row.Content, "token=must-not-enter-log")
+	require.NotContains(t, row.Other, "provider.invalid")
+	require.NotContains(t, row.Other, "token=must-not-enter-log")
+
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
+	require.Equal(t, "unclassified_error", other["error_code"])
+	require.NotContains(t, other, "provider_error_code")
+}
+
 func TestRecordRelayErrorLogPersistsPreUpstreamFailure(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled

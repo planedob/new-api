@@ -27,6 +27,7 @@ const (
 	image2ResponseFailureContextKey   = "image2_upstream_response_failure"
 	relayErrorEventVersion            = 1
 	relayErrorEventName               = "relay_error_event"
+	relayErrorUnclassifiedCode        = "unclassified_error"
 	maxRelayErrorLogDimensionRunes    = 128
 	maxRelayErrorLogExtraRunes        = 512
 )
@@ -181,6 +182,107 @@ var relayErrorEventFields = []string{
 	"provider_error_code",
 }
 
+// These are application-owned error codes. Provider response codes are not
+// part of this set and must never be copied into the canonical error_code
+// field, because an upstream can return arbitrary strings there.
+var relayInternalErrorCodeAllowlist = map[types.ErrorCode]struct{}{
+	types.ErrorCodeInvalidRequest:         {},
+	types.ErrorCodeSensitiveWordsDetected: {},
+	types.ErrorCodeViolationFeeGrokCSAM:   {},
+
+	types.ErrorCodeCountTokenFailed:              {},
+	types.ErrorCodeModelPriceError:               {},
+	types.ErrorCodeInvalidApiType:                {},
+	types.ErrorCodeJsonMarshalFailed:             {},
+	types.ErrorCodeDoRequestFailed:               {},
+	types.ErrorCodeGetChannelFailed:              {},
+	types.ErrorCodeUnsupportedImageConfiguration: {},
+	types.ErrorCodeGenRelayInfoFailed:            {},
+	types.ErrorCodeUnhandledRelayFailure:         {},
+
+	types.ErrorCodeChannelNoAvailableKey:        {},
+	types.ErrorCodeChannelParamOverrideInvalid:  {},
+	types.ErrorCodeChannelHeaderOverrideInvalid: {},
+	types.ErrorCodeChannelModelMappedError:      {},
+	types.ErrorCodeChannelAwsClientError:        {},
+	types.ErrorCodeChannelInvalidKey:            {},
+	types.ErrorCodeChannelResponseTimeExceeded:  {},
+
+	types.ErrorCodeReadRequestBodyFailed: {},
+	types.ErrorCodeConvertRequestFailed:  {},
+	types.ErrorCodeAccessDenied:          {},
+
+	types.ErrorCodeBadRequestBody:            {},
+	types.ErrorCodeImageEditMissingBoundary:  {},
+	types.ErrorCodeImageEditTruncatedBody:    {},
+	types.ErrorCodeImageEditBodyUnavailable:  {},
+	types.ErrorCodeImageEditMissingImage:     {},
+	types.ErrorCodeImageEditEmptyImage:       {},
+	types.ErrorCodeImageEditUnsupportedImage: {},
+	types.ErrorCodeImageEditRequestTooLarge:  {},
+	types.ErrorCodeImageEditMalformed:        {},
+
+	types.ErrorCodeReadResponseBodyFailed: {},
+	types.ErrorCodeBadResponseStatusCode:  {},
+	types.ErrorCodeBadResponse:            {},
+	types.ErrorCodeBadResponseBody:        {},
+	types.ErrorCodeUpstreamImageInvalid:   {},
+	types.ErrorCodeUpstreamImageMissing:   {},
+	types.ErrorCodeEmptyResponse:          {},
+	types.ErrorCodeAwsInvokeError:         {},
+	types.ErrorCodeModelNotFound:          {},
+	types.ErrorCodePromptBlocked:          {},
+
+	types.ErrorCodeQueryDataError:  {},
+	types.ErrorCodeUpdateDataError: {},
+
+	types.ErrorCodeInsufficientUserQuota:      {},
+	types.ErrorCodePreConsumeTokenQuotaFailed: {},
+	types.ErrorCodeEntitlementRequired:        {},
+	types.ErrorCodeEntitlementInactive:        {},
+	types.ErrorCodeEntitlementDailyLimit:      {},
+	types.ErrorCodeEntitlementTotalLimit:      {},
+}
+
+var relayProviderErrorTypeAllowlist = map[string]struct{}{
+	"authentication_error":     {},
+	"invalid_request_error":    {},
+	"permission_error":         {},
+	"rate_limit_error":         {},
+	"server_error":             {},
+	"not_found_error":          {},
+	"content_policy_violation": {},
+	"context_length_exceeded":  {},
+	"invalid_api_key":          {},
+	"model_not_found":          {},
+}
+
+var relayProviderErrorCodeAllowlist = map[string]struct{}{
+	"capacity_exhausted":       {},
+	"content_policy_violation": {},
+	"context_length_exceeded":  {},
+	"invalid_api_key":          {},
+	"invalid_request":          {},
+	"model_not_found":          {},
+	"rate_limit_exceeded":      {},
+	"server_error":             {},
+}
+
+func safeRelayInternalErrorCode(code types.ErrorCode) string {
+	if _, ok := relayInternalErrorCodeAllowlist[code]; !ok {
+		return ""
+	}
+	return string(code)
+}
+
+func safeRelayProviderClassification(value string, allowlist map[string]struct{}) string {
+	value = strings.TrimSpace(value)
+	if _, ok := allowlist[value]; !ok {
+		return ""
+	}
+	return value
+}
+
 // safeRelayErrorEventValue copies only scalar values from the already
 // allowlisted error-log fields. The application log is an operational search
 // surface, so it must not inherit arbitrary values from Extra or provider
@@ -237,7 +339,7 @@ func buildRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, grou
 		if errorType := safeRelayErrorClassificationToken(string(err.GetErrorType())); errorType != "" {
 			event["error_type"] = errorType
 		}
-		if errorCode := safeRelayErrorClassificationToken(string(err.GetErrorCode())); errorCode != "" {
+		if errorCode := safeRelayInternalErrorCode(err.GetErrorCode()); errorCode != "" {
 			event["error_code"] = errorCode
 		}
 		event["error_class"] = relayErrorClass(err)
@@ -328,18 +430,18 @@ func safeProviderErrorDimensions(err *types.NewAPIError) (string, string) {
 	var errorType, errorCode string
 	switch relayErr := err.RelayError.(type) {
 	case types.OpenAIError:
-		errorType = safeRelayErrorClassificationToken(relayErr.Type)
+		errorType = safeRelayProviderClassification(relayErr.Type, relayProviderErrorTypeAllowlist)
 		if code, ok := relayErr.Code.(string); ok {
-			errorCode = safeRelayErrorClassificationToken(code)
+			errorCode = safeRelayProviderClassification(code, relayProviderErrorCodeAllowlist)
 		}
 	case types.ClaudeError:
-		errorType = safeRelayErrorClassificationToken(relayErr.Type)
+		errorType = safeRelayProviderClassification(relayErr.Type, relayProviderErrorTypeAllowlist)
 	}
 	if errorType == "" {
-		errorType = safeRelayErrorClassificationToken(string(err.GetErrorType()))
+		errorType = safeRelayProviderClassification(string(err.GetErrorType()), relayProviderErrorTypeAllowlist)
 	}
 	if errorCode == "" {
-		errorCode = safeRelayErrorClassificationToken(string(err.GetErrorCode()))
+		errorCode = safeRelayProviderClassification(string(err.GetErrorCode()), relayProviderErrorCodeAllowlist)
 	}
 	return errorType, errorCode
 }
@@ -404,7 +506,11 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	other["event_version"] = relayErrorEventVersion
 	other["error_stage"] = options.Stage
 	other["error_type"] = err.GetErrorType()
-	other["error_code"] = err.GetErrorCode()
+	safeErrorCode := safeRelayInternalErrorCode(err.GetErrorCode())
+	if safeErrorCode == "" {
+		safeErrorCode = relayErrorUnclassifiedCode
+	}
+	other["error_code"] = safeErrorCode
 	other["error_class"] = relayErrorClass(err)
 	providerErrorType, providerErrorCode := safeProviderErrorDimensions(err)
 	if providerErrorType != "" {
@@ -505,7 +611,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		"",
 		// Persist only the stable error classification. Provider response bodies
 		// can contain arbitrary sensitive content even after URL/key masking.
-		fmt.Sprintf("error_code=%s status_code=%d", err.GetErrorCode(), err.StatusCode),
+		fmt.Sprintf("error_code=%s status_code=%d", safeErrorCode, err.StatusCode),
 		0,
 		useTimeSeconds,
 		common.GetContextKeyBool(c, constant.ContextKeyIsStream),
