@@ -181,12 +181,55 @@ func TestFakeUpstreamCreateQueryLifecycleUsesDistinctTianyiPaths(t *testing.T) {
 	}
 }
 
+func TestCreateRequestDoesNotReplayAcrossRedirect(t *testing.T) {
+	service.InitHttpClient()
+	var createCount, redirectCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/video_generation":
+			createCount++
+			w.Header().Set("Location", "/v1/video_generation-redirected")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/video_generation-redirected":
+			redirectCount++
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	info := testInfo(server.URL)
+	adaptor := &TaskAdaptor{}
+	adaptor.Init(info)
+	ctx := jsonContext(`{"model":"minimax-h3","prompt":"redirect must not replay"}`)
+	if err := adaptor.ValidateRequestAndSetAction(ctx, info); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	body, err := adaptor.BuildRequestBody(ctx, info)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	resp, err := adaptor.DoRequest(ctx, info, body)
+	if err != nil {
+		t.Fatalf("DoRequest: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusTemporaryRedirect)
+	}
+	if createCount != 1 || redirectCount != 0 {
+		t.Fatalf("request counts = create:%d redirected:%d, want 1:0", createCount, redirectCount)
+	}
+}
+
 func TestDoResponseRejectsMissingTaskIDAndUnknownStatus(t *testing.T) {
 	adaptor := &TaskAdaptor{}
 	info := testInfo("https://upstream.invalid")
 	for _, body := range []string{
 		`{"status":"queued"}`,
 		`{"task_id":"ty-task-1","status":"mystery"}`,
+		`{"task_id":"ty-task-1"}`,
 		`{"task_id":"ty-task-1","status":"failed","message":"rejected"}`,
 	} {
 		ctx := jsonContext(`{"model":"minimax-h3","prompt":"test"}`)
@@ -194,6 +237,12 @@ func TestDoResponseRejectsMissingTaskIDAndUnknownStatus(t *testing.T) {
 		if taskErr == nil {
 			t.Fatalf("DoResponse unexpectedly accepted %s", body)
 		}
+	}
+}
+
+func TestParseTaskResultRejectsSuccessfulResponseWithoutVideoURL(t *testing.T) {
+	if _, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{"task_id":"ty-task-1","status":"succeeded"}`)); err == nil {
+		t.Fatal("ParseTaskResult unexpectedly accepted success without video URL")
 	}
 }
 

@@ -182,7 +182,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, _ *relaycommon.RelayInfo)
 }
 
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
-	return channel.DoTaskApiRequest(a, c, info, requestBody)
+	return channel.DoTaskApiRequestNoReplay(a, c, info, requestBody)
 }
 
 func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
@@ -194,6 +194,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusBadGateway)
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", nil, service.TaskErrorWrapperLocal(fmt.Errorf("TY H3 create request returned HTTP %d", resp.StatusCode), "upstream_task_failed", http.StatusBadGateway)
+	}
 	parsed, err := decodeProviderResponse(body)
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "unmarshal_response_failed", http.StatusBadGateway)
@@ -201,7 +204,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if isFailureStatus(parsed.Status) {
 		return "", nil, service.TaskErrorWrapperLocal(errors.New(providerFailureMessage(parsed)), "upstream_task_failed", http.StatusBadGateway)
 	}
-	if parsed.Status != "" && !isAcceptedStatus(parsed.Status) {
+	if strings.TrimSpace(parsed.Status) == "" || !isAcceptedStatus(parsed.Status) {
 		return "", nil, service.TaskErrorWrapper(fmt.Errorf("unsupported TY H3 initial status: %q", parsed.Status), "invalid_response", http.StatusBadGateway)
 	}
 	taskID = responseTaskID(parsed)
@@ -266,6 +269,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		result.Status = model.TaskStatusSuccess
 		result.Progress = "100%"
 		result.Url = responseVideoURL(parsed)
+		if result.Url == "" {
+			return nil, errors.New("TY H3 success response has no video URL")
+		}
 	case isFailureStatus(status):
 		result.Status = model.TaskStatusFailure
 		result.Progress = "100%"

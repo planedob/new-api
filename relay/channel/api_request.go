@@ -563,3 +563,55 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	}
 	return resp, nil
 }
+
+// DoTaskApiRequestNoReplay submits a task creation request without allowing
+// net/http to replay a non-idempotent POST across redirects.  Task creation
+// endpoints must opt into this helper explicitly; ordinary request adapters
+// retain the existing behavior for compatibility.
+func DoTaskApiRequestNoReplay(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	fullRequestURL, err := a.BuildRequestURL(info)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("new request failed: %w", err)
+	}
+	// http.NewRequest can infer GetBody for bytes.Reader/strings.Reader.  A
+	// task creation POST is not idempotent, so explicitly disable replay.
+	req.GetBody = nil
+	if err := a.BuildRequestHeader(c, req, info); err != nil {
+		return nil, fmt.Errorf("setup request header failed: %w", err)
+	}
+	var client *http.Client
+	if info != nil && info.ChannelSetting.Proxy != "" {
+		client, err = service.NewProxyHttpClient(info.ChannelSetting.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("new proxy http client failed: %w", err)
+		}
+	} else {
+		client = service.GetHttpClient()
+	}
+	if client == nil {
+		return nil, errors.New("http client is not initialized")
+	}
+	// Do not mutate the shared client: it may be used concurrently by other
+	// requests.  ErrUseLastResponse returns the redirect response without
+	// issuing a second request, preserving the single-submit invariant.
+	noReplayClient := *client
+	noReplayClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	common2.SetContextKey(c, globalconstant.ContextKeyUpstreamCalled, true)
+	resp, err := noReplayClient.Do(req)
+	if err != nil {
+		logger.LogError(c, "do task request failed: "+err.Error())
+		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do task request failed"))
+	}
+	if resp == nil {
+		return nil, errors.New("resp is nil")
+	}
+	_ = req.Body.Close()
+	_ = c.Request.Body.Close()
+	return resp, nil
+}
