@@ -70,6 +70,22 @@ func TestBuildRelayErrorEventJoinsRequestAndLifecycleSafely(t *testing.T) {
 	require.NotContains(t, common.MapToJsonStr(event), "token=must-not-enter-log")
 }
 
+func TestBuildRelayErrorEventRejectsProviderControlledClassification(t *testing.T) {
+	c := relayErrorLogTestContext()
+	err := types.WithOpenAIError(types.OpenAIError{
+		Message: "provider response must not enter application logs",
+		Type:    "server_error",
+		Code:    "https://provider.invalid/secret?token=must-not-enter-log",
+	}, http.StatusBadGateway)
+	event := buildRelayErrorEvent(c, 4242, 19, "gpt-image-2", "image2-test", err, nil, true)
+	serialized := common.MapToJsonStr(event)
+
+	require.NotContains(t, event, "error_code")
+	require.NotContains(t, serialized, "provider.invalid")
+	require.NotContains(t, serialized, "token=must-not-enter-log")
+	require.Equal(t, "openai_error", event["error_type"])
+}
+
 func TestRecordRelayErrorLogPersistsPreUpstreamFailure(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled

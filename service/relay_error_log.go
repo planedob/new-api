@@ -151,11 +151,6 @@ func safeRelayErrorLogExtra(extra map[string]interface{}) map[string]interface{}
 
 var relayErrorEventFields = []string{
 	"error_stage",
-	"error_type",
-	"error_code",
-	"error_class",
-	"status_code",
-	"channel_id",
 	"upstream_called",
 	"upstream_accepted_known",
 	"upstream_accepted",
@@ -182,6 +177,8 @@ var relayErrorEventFields = []string{
 	"requested_model",
 	"response_status",
 	"selection_group",
+	"provider_error_type",
+	"provider_error_code",
 }
 
 // safeRelayErrorEventValue copies only scalar values from the already
@@ -237,8 +234,12 @@ func buildRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, grou
 	}
 	if err != nil {
 		event["status_code"] = err.StatusCode
-		event["error_type"] = string(err.GetErrorType())
-		event["error_code"] = string(err.GetErrorCode())
+		if errorType := safeRelayErrorClassificationToken(string(err.GetErrorType())); errorType != "" {
+			event["error_type"] = errorType
+		}
+		if errorCode := safeRelayErrorClassificationToken(string(err.GetErrorCode())); errorCode != "" {
+			event["error_code"] = errorCode
+		}
 		event["error_class"] = relayErrorClass(err)
 	}
 	for _, key := range relayErrorEventFields {
