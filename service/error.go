@@ -104,7 +104,11 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
-			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, string(responseBody)))
+			// Never write an unparseable upstream body to the application log. The
+			// structured relay error event records the safe lifecycle fields and
+			// request correlation separately; this branch only needs a bounded
+			// diagnostic indicating that parsing failed.
+			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body_unparseable=true, body_bytes=%d", resp.StatusCode, len(responseBody)))
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
 		}
 		return

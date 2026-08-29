@@ -538,14 +538,14 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(
-				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%v",
+				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%s",
 				channel.Id,
 				channel.Name,
 				channel.Type,
 				testModel,
 				endpointType,
 				httpResp.StatusCode,
-				err,
+				service.RelayErrorLogSummary(err),
 			))
 			return testResult{
 				context:     c,
