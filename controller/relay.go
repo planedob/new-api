@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -90,7 +89,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	defer func() {
 		if newAPIError != nil {
-			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+			logger.LogError(c, service.RelayErrorLogSummary(newAPIError))
 			if !service.WasRelayErrorLogged(c, newAPIError) {
 				service.RecordRelayErrorLog(c, newAPIError, service.RelayErrorLogOptions{
 					Stage:          relayErrorStage,
@@ -284,7 +283,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayErrorExtra = nil
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
-			logger.LogError(c, channelErr.Error())
+			logger.LogError(c, service.RelayErrorLogSummary(channelErr))
 			newAPIError = channelErr
 			break
 		}
@@ -295,7 +294,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				types.ErrorCodeGetChannelFailed,
 				types.ErrOptionWithSkipRetry(),
 			)
-			logger.LogError(c, newAPIError.Error())
+			logger.LogError(c, service.RelayErrorLogSummary(newAPIError))
 			break
 		}
 		addUsedChannel(c, channel.Id)
@@ -535,7 +534,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 }
 
 func processChannelErrorWithRetryDecision(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, retryDecision *bool, relayInfos ...*relaycommon.RelayInfo) {
-	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d): %s", channelError.ChannelId, service.RelayErrorLogSummary(err)))
 	// Passive monitoring is strictly observational; it does not participate in
 	// retry decisions or channel health state.
 	service.ObserveImage2UpstreamError(c, err, channelError.ChannelId)
@@ -613,7 +612,6 @@ func RelayMidjourney(c *gin.Context) {
 		mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
 	}
 	//err = relayMidjourneySubmit(c, relayMode)
-	log.Println(mjErr)
 	if mjErr != nil {
 		statusCode := http.StatusBadRequest
 		if mjErr.Code == 30 {
@@ -626,7 +624,7 @@ func RelayMidjourney(c *gin.Context) {
 			"code":        mjErr.Code,
 		})
 		channelId := c.GetInt("channel_id")
-		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
+		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d, code %d)", channelId, statusCode, mjErr.Code))
 	}
 }
 
@@ -717,7 +715,7 @@ func RelayTask(c *gin.Context) {
 			var channelErr *types.NewAPIError
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 			if channelErr != nil {
-				logger.LogError(c, channelErr.Error())
+				logger.LogError(c, service.RelayErrorLogSummary(channelErr))
 				service.RecordRelayErrorLog(c, channelErr, service.RelayErrorLogOptions{
 					Stage: "channel_selection",
 					Extra: map[string]interface{}{"relay_kind": "task"},

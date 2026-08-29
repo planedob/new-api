@@ -87,6 +87,20 @@ func TestBuildRelayErrorEventRejectsProviderControlledClassification(t *testing.
 	require.Equal(t, "openai_error", event["error_type"])
 }
 
+func TestRelayErrorLogSummaryDoesNotIncludeProviderMaterial(t *testing.T) {
+	err := types.WithOpenAIError(types.OpenAIError{
+		Message: "provider body must not enter direct application logs",
+		Type:    "server_error",
+		Code:    "https://provider.invalid/error?token=must-not-enter-log",
+	}, http.StatusBadGateway)
+
+	summary := RelayErrorLogSummary(err)
+	require.Contains(t, summary, "status_code=502")
+	require.Contains(t, summary, "error_class=upstream_server")
+	require.NotContains(t, summary, "provider.invalid")
+	require.NotContains(t, summary, "must-not-enter-log")
+}
+
 func TestRecordRelayErrorLogRedactsProviderControlledCodeEndToEnd(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled
@@ -139,6 +153,17 @@ func TestRecordRelayErrorLogRedactsUntrustedDimensionsEndToEnd(t *testing.T) {
 	})
 
 	c := relayErrorLogTestContext()
+	c.Set(ginKeyChannelAffinityLogInfo, map[string]interface{}{
+		"rule_name":    "affinity-rule",
+		"model":        "https://provider.invalid/model?token=must-not-enter-log",
+		"request_path": "/v1/images/generations/provider-secret",
+		"key_hint":     "provider-secret",
+		"key_fp":       "safe-fp",
+		"override_template": map[string]interface{}{
+			"applied":             true,
+			"param_override_keys": 1,
+		},
+	})
 	relayErr := types.NewErrorWithStatusCode(
 		errors.New("provider body https://provider.invalid/secret?token=must-not-enter-log"),
 		types.ErrorCodeBadResponseStatusCode,

@@ -286,6 +286,21 @@ func safeRelayInternalErrorCode(code types.ErrorCode) string {
 	return string(code)
 }
 
+// RelayErrorLogSummary is safe for direct application logging. It intentionally
+// excludes NewAPIError.Error(), which may contain an upstream response body,
+// prompt material, a URL, or a credential. Detailed lifecycle data is emitted
+// separately by RecordRelayErrorLog when the existing error-log gate permits it.
+func RelayErrorLogSummary(err *types.NewAPIError) string {
+	if err == nil {
+		return "relay error status_code=0 error_code=" + relayErrorUnclassifiedCode
+	}
+	errorCode := safeRelayInternalErrorCode(err.GetErrorCode())
+	if errorCode == "" {
+		errorCode = relayErrorUnclassifiedCode
+	}
+	return fmt.Sprintf("relay error status_code=%d error_code=%s error_class=%s", err.StatusCode, errorCode, relayErrorClass(err))
+}
+
 var relayInternalErrorTypeAllowlist = map[types.ErrorType]struct{}{
 	types.ErrorTypeNewAPIError:     {},
 	types.ErrorTypeOpenAIError:     {},
@@ -324,6 +339,82 @@ func safeRelayDiagnosticText(value string, maxRunes int) string {
 
 func safeRelayDimensionText(value string) string {
 	return safeRelayDiagnosticText(value, maxRelayErrorLogDimensionRunes)
+}
+
+func safeRelayAdminInfo(info map[string]interface{}) map[string]interface{} {
+	if len(info) == 0 {
+		return nil
+	}
+	safe := make(map[string]interface{}, len(info))
+	for key, value := range info {
+		switch key {
+		case "use_channel":
+			ids, ok := value.([]string)
+			if !ok {
+				continue
+			}
+			safeIDs := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if id != "" && relayChannelIDPattern.MatchString(id) {
+					safeIDs = append(safeIDs, id)
+				}
+			}
+			safe[key] = safeIDs
+		case "is_multi_key", "local_count_tokens":
+			if typed, ok := value.(bool); ok {
+				safe[key] = typed
+			}
+		case "multi_key_index":
+			if typed, ok := value.(int); ok {
+				safe[key] = typed
+			}
+		case "channel_affinity":
+			if typed, ok := value.(map[string]interface{}); ok {
+				if affinity := safeRelayChannelAffinityInfo(typed); affinity != nil {
+					safe[key] = affinity
+				}
+			}
+		}
+	}
+	return safe
+}
+
+var relayChannelIDPattern = regexp.MustCompile(`^[0-9]{1,20}$`)
+
+func safeRelayChannelAffinityInfo(info map[string]interface{}) map[string]interface{} {
+	if len(info) == 0 {
+		return nil
+	}
+	safe := make(map[string]interface{}, len(info))
+	for key, value := range info {
+		switch typed := value.(type) {
+		case string:
+			// Do not persist the original request path or any key material. The
+			// remaining labels are useful only after the same diagnostic boundary
+			// as model/group values.
+			if key == "request_path" || key == "key_hint" {
+				continue
+			}
+			if value := safeRelayDimensionText(typed); value != "" {
+				safe[key] = value
+			}
+		case int:
+			if key == "channel_id" || key == "param_override_keys" {
+				safe[key] = typed
+			}
+		case bool:
+			if key == "applied" {
+				safe[key] = typed
+			}
+		case map[string]interface{}:
+			if key == "override_template" {
+				if template := safeRelayChannelAffinityInfo(typed); template != nil {
+					safe[key] = template
+				}
+			}
+		}
+	}
+	return safe
 }
 
 var relayErrorStageAllowlist = map[string]struct{}{
@@ -707,7 +798,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		adminInfo["image2_request_capability"] = image2CapabilitySummary(*options.Image2)
 	}
 	AppendChannelAffinityAdminInfo(c, adminInfo)
-	other["admin_info"] = adminInfo
+	other["admin_info"] = safeRelayAdminInfo(adminInfo)
 
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {

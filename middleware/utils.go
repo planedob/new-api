@@ -42,12 +42,12 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 
 func abortWithOpenAiMessageAndRecord(c *gin.Context, statusCode int, message string, code types.ErrorCode, options service.RelayErrorLogOptions) {
 	userId := c.GetInt("id")
+	relayErr := types.NewErrorWithStatusCode(errors.New(message), code, statusCode, types.ErrOptionWithSkipRetry())
 	// Anonymous 4xx requests are normally invalid credentials or untrusted
 	// traffic. Keep them in the application/security log instead of allowing
 	// them to flood the customer error table. Authenticated failures and every
 	// 5xx are operationally searchable.
 	if userId > 0 || statusCode >= http.StatusInternalServerError {
-		relayErr := types.NewErrorWithStatusCode(errors.New(message), code, statusCode, types.ErrOptionWithSkipRetry())
 		service.RecordRelayErrorLog(c, relayErr, options)
 	}
 	c.JSON(statusCode, gin.H{
@@ -58,7 +58,7 @@ func abortWithOpenAiMessageAndRecord(c *gin.Context, statusCode int, message str
 		},
 	})
 	c.Abort()
-	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))
+	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, service.RelayErrorLogSummary(relayErr)))
 }
 
 // abortWithOpenAiMessageAndRecordSelection is reserved for model/group
