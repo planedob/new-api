@@ -189,8 +189,6 @@ var relayErrorEventFields = []string{
 	"requested_model",
 	"response_status",
 	"selection_group",
-	"provider_error_type",
-	"provider_error_code",
 }
 
 // These are application-owned error codes. Provider response codes are not
@@ -255,30 +253,6 @@ var relayInternalErrorCodeAllowlist = map[types.ErrorCode]struct{}{
 	types.ErrorCodeEntitlementTotalLimit:      {},
 }
 
-var relayProviderErrorTypeAllowlist = map[string]struct{}{
-	"authentication_error":     {},
-	"invalid_request_error":    {},
-	"permission_error":         {},
-	"rate_limit_error":         {},
-	"server_error":             {},
-	"not_found_error":          {},
-	"content_policy_violation": {},
-	"context_length_exceeded":  {},
-	"invalid_api_key":          {},
-	"model_not_found":          {},
-}
-
-var relayProviderErrorCodeAllowlist = map[string]struct{}{
-	"capacity_exhausted":       {},
-	"content_policy_violation": {},
-	"context_length_exceeded":  {},
-	"invalid_api_key":          {},
-	"invalid_request":          {},
-	"model_not_found":          {},
-	"rate_limit_exceeded":      {},
-	"server_error":             {},
-}
-
 func safeRelayInternalErrorCode(code types.ErrorCode) string {
 	if _, ok := relayInternalErrorCodeAllowlist[code]; !ok {
 		return ""
@@ -318,12 +292,16 @@ func safeRelayInternalErrorType(errorType types.ErrorType) string {
 	return string(errorType)
 }
 
-func safeRelayProviderClassification(value string, allowlist map[string]struct{}) string {
-	value = strings.TrimSpace(value)
-	if _, ok := allowlist[value]; !ok {
-		return ""
+// SafeRelayErrorCode exposes only application-owned error codes to callers
+// that need to return a diagnostic without copying a provider-controlled code.
+func SafeRelayErrorCode(err *types.NewAPIError) string {
+	if err == nil {
+		return relayErrorUnclassifiedCode
 	}
-	return value
+	if code := safeRelayInternalErrorCode(err.GetErrorCode()); code != "" {
+		return code
+	}
+	return relayErrorUnclassifiedCode
 }
 
 func safeRelayDiagnosticText(value string, maxRunes int) string {
@@ -427,6 +405,11 @@ var relayErrorStageAllowlist = map[string]struct{}{
 	"channel_selection":  {},
 	"response_audit":     {},
 	"upstream":           {},
+	"relay_info":         {},
+	"content_validation": {},
+	"token_estimation":   {},
+	"pricing":            {},
+	"request_body":       {},
 }
 
 func safeRelayStage(stage string) string {
@@ -483,14 +466,6 @@ func safeRelayErrorEventValue(key string, value interface{}) (interface{}, bool)
 			return nil, false
 		case "requested_model", "selection_group":
 			value := safeRelayDimensionText(typed)
-			return value, value != ""
-		}
-		if key == "provider_error_type" {
-			value := safeRelayProviderClassification(typed, relayProviderErrorTypeAllowlist)
-			return value, value != ""
-		}
-		if key == "provider_error_code" {
-			value := safeRelayProviderClassification(typed, relayProviderErrorCodeAllowlist)
 			return value, value != ""
 		}
 		value := safeRelayDiagnosticText(typed, maxRelayErrorLogExtraRunes)
@@ -627,29 +602,6 @@ func relayErrorClass(err *types.NewAPIError) string {
 	return "unknown"
 }
 
-func safeProviderErrorDimensions(err *types.NewAPIError) (string, string) {
-	if err == nil {
-		return "", ""
-	}
-	var errorType, errorCode string
-	switch relayErr := err.RelayError.(type) {
-	case types.OpenAIError:
-		errorType = safeRelayProviderClassification(relayErr.Type, relayProviderErrorTypeAllowlist)
-		if code, ok := relayErr.Code.(string); ok {
-			errorCode = safeRelayProviderClassification(code, relayProviderErrorCodeAllowlist)
-		}
-	case types.ClaudeError:
-		errorType = safeRelayProviderClassification(relayErr.Type, relayProviderErrorTypeAllowlist)
-	}
-	if errorType == "" {
-		errorType = safeRelayProviderClassification(string(err.GetErrorType()), relayProviderErrorTypeAllowlist)
-	}
-	if errorCode == "" {
-		errorCode = safeRelayProviderClassification(string(err.GetErrorCode()), relayProviderErrorCodeAllowlist)
-	}
-	return errorType, errorCode
-}
-
 func normalizeRelayErrorBillingState(state RelayErrorBillingState) RelayErrorBillingState {
 	switch state {
 	case RelayErrorBillingNotStarted, RelayErrorBillingNotApplicable, RelayErrorBillingPreConsumed:
@@ -716,13 +668,6 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	}
 	other["error_code"] = safeErrorCode
 	other["error_class"] = relayErrorClass(err)
-	providerErrorType, providerErrorCode := safeProviderErrorDimensions(err)
-	if providerErrorType != "" {
-		other["provider_error_type"] = providerErrorType
-	}
-	if providerErrorCode != "" {
-		other["provider_error_code"] = providerErrorCode
-	}
 	other["status_code"] = err.StatusCode
 	other["channel_id"] = channelID
 	other["channel_name"] = channelName
@@ -824,6 +769,10 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	)
 	if persistErr != nil {
 		c.Set(relayErrorLogPersistenceFailedKey, true)
+		// The failure itself is already represented by the safe event below.
+		// Mark it handled so response-audit middleware does not emit a second
+		// event for the same Request ID.
+		c.Set(relayErrorLogRecordedAnyKey, true)
 		logRelayErrorEvent(c, userID, channelID, modelName, group, err, other, false)
 		return false
 	}

@@ -15,8 +15,10 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func relayObservabilityTestContext(path string) *gin.Context {
@@ -58,6 +60,26 @@ func TestRelayObservabilityFlagsOffIsNoOp(t *testing.T) {
 	var count int64
 	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&count).Error)
 	assert.Zero(t, count)
+}
+
+func TestRelayErrorLogPersistenceFailureMarksRequestAsHandled(t *testing.T) {
+	previousErrorLog := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrorLog })
+
+	previousLogDB := model.LOG_DB
+	t.Cleanup(func() { model.LOG_DB = previousLogDB })
+	db, err := gorm.Open(sqlite.Open("file:relay-observability-persistence-failure?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.LOG_DB = db
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	c := relayObservabilityTestContext("/v1/images/generations")
+	relayErr := types.NewErrorWithStatusCode(errors.New("synthetic failure"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
+	require.False(t, RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{Stage: "upstream"}))
+	require.True(t, HasRelayErrorLog(c))
 }
 
 func TestRecordRelayErrorLogPersistsSafeNoCandidateEvent(t *testing.T) {

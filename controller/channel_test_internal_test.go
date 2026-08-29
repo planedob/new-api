@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayhelper "github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -119,6 +121,20 @@ func TestChannelTestImageEditsUsesMultipartFixedReferenceWithoutGenerationFallba
 	assert.Equal(t, 256, decoded.Bounds().Dx())
 	assert.Equal(t, 256, decoded.Bounds().Dy())
 
+}
+
+func TestChannelTestResultMessageOmitsProviderMaterial(t *testing.T) {
+	providerErr := types.WithOpenAIError(types.OpenAIError{
+		Message: "provider body https://supplier.invalid/error?token=secret",
+		Type:    "server_error",
+		Code:    "capacity_exhausted",
+	}, http.StatusBadGateway)
+	message := channelTestResultMessage(testResult{newAPIError: providerErr, localErr: errors.New("must not be returned")})
+	assert.Contains(t, message, "status_code=502")
+	assert.NotContains(t, message, "supplier.invalid")
+	assert.NotContains(t, message, "secret")
+	assert.NotContains(t, message, "provider body")
+	assert.Equal(t, "unclassified_error", service.SafeRelayErrorCode(providerErr))
 }
 
 func TestImageEditsEndpointHasDistinctSharedPath(t *testing.T) {

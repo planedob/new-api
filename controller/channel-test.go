@@ -377,10 +377,17 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		}
 	}
 
-	//// 创建一个用于日志的 info 副本，移除 ApiKey
-	//logInfo := info
-	//logInfo.ApiKey = ""
-	common.SysLog(fmt.Sprintf("testing channel %d with model %s , info %+v ", channel.Id, testModel, info.ToString()))
+	// RelayInfo contains provider-controlled fields such as BaseURL and API
+	// material. Log only fixed operational dimensions; never stringify the
+	// entire object.
+	common.SysLog(fmt.Sprintf(
+		"testing channel #%d model=%s channel_type=%d relay_mode=%v endpoint_type=%s",
+		channel.Id,
+		testModel,
+		channel.Type,
+		info.RelayMode,
+		endpointType,
+	))
 
 	priceData, err := helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
 	if err != nil {
@@ -536,7 +543,15 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
 		if httpResp.StatusCode != http.StatusOK {
-			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
+			// Drain the response for connection reuse, but do not propagate any
+			// provider-controlled message/body into the admin response or later
+			// channel-disable/error-log paths.
+			_ = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			safeErr := types.NewErrorWithStatusCode(
+				fmt.Errorf("channel test upstream returned HTTP %d", httpResp.StatusCode),
+				types.ErrorCodeBadResponse,
+				http.StatusInternalServerError,
+			)
 			common.SysError(fmt.Sprintf(
 				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%s",
 				channel.Id,
@@ -545,12 +560,12 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				testModel,
 				endpointType,
 				httpResp.StatusCode,
-				service.RelayErrorLogSummary(err),
+				service.RelayErrorLogSummary(safeErr),
 			))
 			return testResult{
 				context:     c,
-				localErr:    err,
-				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				localErr:    safeErr,
+				newAPIError: safeErr,
 			}
 		}
 	}
@@ -620,7 +635,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		Group:            info.UsingGroup,
 		Other:            other,
 	})
-	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	common.SysLog(fmt.Sprintf("testing channel #%d response_bytes=%d response_sha256=%s", channel.Id, len(respBody), image2EvidenceSHA256))
 	return testResult{
 		context:              c,
 		localErr:             nil,
@@ -1095,11 +1110,11 @@ func TestChannel(c *gin.Context) {
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
-			"message": result.localErr.Error(),
+			"message": channelTestResultMessage(result),
 			"time":    0.0,
 		}
 		if result.newAPIError != nil {
-			resp["error_code"] = result.newAPIError.GetErrorCode()
+			resp["error_code"] = service.SafeRelayErrorCode(result.newAPIError)
 		}
 		c.JSON(http.StatusOK, resp)
 		return
@@ -1111,9 +1126,9 @@ func TestChannel(c *gin.Context) {
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success":    false,
-			"message":    result.newAPIError.Error(),
+			"message":    channelTestResultMessage(result),
 			"time":       consumedTime,
-			"error_code": result.newAPIError.GetErrorCode(),
+			"error_code": service.SafeRelayErrorCode(result.newAPIError),
 		})
 		return
 	}
@@ -1127,6 +1142,13 @@ func TestChannel(c *gin.Context) {
 		response["image2_evidence_sha256"] = result.image2EvidenceSHA256
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func channelTestResultMessage(result testResult) string {
+	if result.newAPIError == nil {
+		return "channel test failed"
+	}
+	return service.RelayErrorLogSummary(result.newAPIError)
 }
 
 var testAllChannelsLock sync.Mutex

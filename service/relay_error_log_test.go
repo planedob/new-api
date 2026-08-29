@@ -87,6 +87,13 @@ func TestBuildRelayErrorEventRejectsProviderControlledClassification(t *testing.
 	require.Equal(t, "openai_error", event["error_type"])
 }
 
+func TestSafeRelayStageAcceptsOperationalStages(t *testing.T) {
+	for _, stage := range []string{"relay_info", "content_validation", "token_estimation", "pricing", "request_body"} {
+		require.Equal(t, stage, safeRelayStage(stage))
+	}
+	require.Equal(t, "unknown", safeRelayStage("provider-body"))
+}
+
 func TestRelayErrorLogSummaryDoesNotIncludeProviderMaterial(t *testing.T) {
 	err := types.WithOpenAIError(types.OpenAIError{
 		Message: "provider body must not enter direct application logs",
@@ -348,7 +355,7 @@ func TestRecordRelayErrorLogStoresOnlyAllowlistedImage2ResponseFailure(t *testin
 	require.Empty(t, Image2ResponseFailure(c))
 }
 
-func TestRecordRelayErrorLogStoresOnlySafeProviderClassification(t *testing.T) {
+func TestRecordRelayErrorLogOmitsProviderClassification(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled
 	constant.ErrorLogEnabled = true
@@ -369,20 +376,26 @@ func TestRecordRelayErrorLogStoresOnlySafeProviderClassification(t *testing.T) {
 	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
 	other := map[string]interface{}{}
 	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
-	require.Equal(t, "server_error", other["provider_error_type"])
-	require.Equal(t, "capacity_exhausted", other["provider_error_code"])
+	require.NotContains(t, other, "provider_error_type")
+	require.NotContains(t, other, "provider_error_code")
 	require.Equal(t, "upstream_server", other["error_class"])
 	require.NotContains(t, row.Content, "customer-secret")
 	require.NotContains(t, row.Other, "customer-secret")
 	require.NotContains(t, row.Other, "provider-secret")
 
-	unsafe := types.WithOpenAIError(types.OpenAIError{
-		Message: "do not persist",
-		Type:    "https://supplier.example/error?token=secret",
-		Code:    "bad code with secret data",
+}
+
+func TestSafeChannelDisableReasonOmitsProviderMaterial(t *testing.T) {
+	err := types.WithOpenAIError(types.OpenAIError{
+		Message: "provider body https://supplier.invalid/error?token=secret",
+		Type:    "server_error",
+		Code:    "capacity_exhausted",
 	}, http.StatusBadGateway)
-	require.Equal(t, "", safeRelayErrorClassificationToken(unsafe.RelayError.(types.OpenAIError).Type))
-	require.Equal(t, "", safeRelayErrorClassificationToken(unsafe.RelayError.(types.OpenAIError).Code.(string)))
+	reason := SafeChannelDisableReason(err)
+	require.Contains(t, reason, "status_code=502")
+	require.NotContains(t, reason, "supplier.invalid")
+	require.NotContains(t, reason, "capacity_exhausted")
+	require.NotContains(t, reason, "secret")
 }
 
 func TestRecordRelayErrorLogRespectsNoRecordOption(t *testing.T) {

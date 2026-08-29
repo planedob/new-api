@@ -64,6 +64,21 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	return search
 }
 
+// SafeChannelDisableReason returns an application-owned, bounded reason for
+// the automatic channel-disable audit trail. NewAPIError may contain an
+// arbitrary upstream response body, URL, or credential, so callers must not
+// persist Error() or ErrorWithStatusCode() here.
+func SafeChannelDisableReason(err *types.NewAPIError) string {
+	if err == nil {
+		return "automatic_disable:unclassified_error"
+	}
+	code := safeRelayInternalErrorCode(err.GetErrorCode())
+	if code == "" {
+		code = relayErrorUnclassifiedCode
+	}
+	return fmt.Sprintf("automatic_disable:error_code=%s status_code=%d", code, err.StatusCode)
+}
+
 func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
 	if !common.AutomaticEnableChannelEnabled {
 		return false
