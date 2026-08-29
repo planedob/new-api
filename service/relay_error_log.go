@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -24,6 +26,7 @@ const (
 	relayErrorLogPersistenceFailedKey = "relay_error_log_persistence_failed"
 	image2ResponseFailureContextKey   = "image2_upstream_response_failure"
 	relayErrorEventVersion            = 1
+	relayErrorEventName               = "relay_error_event"
 	maxRelayErrorLogDimensionRunes    = 128
 	maxRelayErrorLogExtraRunes        = 512
 )
@@ -144,6 +147,124 @@ func safeRelayErrorLogExtra(extra map[string]interface{}) map[string]interface{}
 		}
 	}
 	return safe
+}
+
+var relayErrorEventFields = []string{
+	"error_stage",
+	"error_type",
+	"error_code",
+	"error_class",
+	"status_code",
+	"channel_id",
+	"upstream_called",
+	"upstream_accepted_known",
+	"upstream_accepted",
+	"upstream_state",
+	"response_written_known",
+	"response_written",
+	"retry_known",
+	"retry",
+	"retry_index",
+	"task_state",
+	"billing_state",
+	"charge_known",
+	"charged",
+	"refund_state",
+	"failure_scope",
+	"request_route",
+	"request_method",
+	"elapsed_ms",
+	"image2_response_failure",
+	"fallback_audit",
+	"image2_candidate_decisions",
+	"image2_request_capability",
+	"relay_kind",
+	"requested_model",
+	"response_status",
+	"selection_group",
+}
+
+// safeRelayErrorEventValue copies only scalar values from the already
+// allowlisted error-log fields. The application log is an operational search
+// surface, so it must not inherit arbitrary values from Extra or provider
+// responses.
+func safeRelayErrorEventValue(value interface{}) (interface{}, bool) {
+	switch typed := value.(type) {
+	case string:
+		return boundedRelayErrorLogText(typed, maxRelayErrorLogExtraRunes), true
+	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return typed, true
+	case float32:
+		if math.IsNaN(float64(typed)) || math.IsInf(float64(typed), 0) {
+			return nil, false
+		}
+		return typed, true
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return nil, false
+		}
+		return typed, true
+	case RelayErrorBillingState:
+		return string(normalizeRelayErrorBillingState(typed)), true
+	default:
+		return nil, false
+	}
+}
+
+// buildRelayErrorEvent creates the stable, grep/JSON-friendly application log
+// payload for an error row. It deliberately mirrors the persisted lifecycle
+// fields and includes the same request ID that RecordErrorLogWithResult puts
+// in model.Log.RequestId, making file logs and the admin error table
+// joinable without storing prompts, images, URLs, tokens, cookies, or provider
+// bodies.
+func buildRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, group string, err *types.NewAPIError, other map[string]interface{}, persisted bool) map[string]interface{} {
+	event := map[string]interface{}{
+		"event":         relayErrorEventName,
+		"event_version": relayErrorEventVersion,
+		"persisted":     persisted,
+		"user_id":       userID,
+		"channel_id":    channelID,
+		"model":         boundedRelayErrorLogText(modelName, maxRelayErrorLogDimensionRunes),
+		"group":         boundedRelayErrorLogText(group, maxRelayErrorLogDimensionRunes),
+	}
+	requestID := ""
+	if c != nil {
+		requestID = safeRelayErrorClassificationToken(c.GetString(common.RequestIdKey))
+	}
+	event["request_id_known"] = requestID != ""
+	if requestID != "" {
+		event["request_id"] = requestID
+	}
+	if err != nil {
+		event["status_code"] = err.StatusCode
+		event["error_type"] = string(err.GetErrorType())
+		event["error_code"] = string(err.GetErrorCode())
+		event["error_class"] = relayErrorClass(err)
+	}
+	for _, key := range relayErrorEventFields {
+		value, ok := other[key]
+		if !ok {
+			continue
+		}
+		if safe, ok := safeRelayErrorEventValue(value); ok {
+			event[key] = safe
+		}
+	}
+	return event
+}
+
+func logRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, group string, err *types.NewAPIError, other map[string]interface{}, persisted bool) {
+	if c == nil || c.Request == nil {
+		return
+	}
+	event := buildRelayErrorEvent(c, userID, channelID, modelName, group, err, other, persisted)
+	ctx := c.Request.Context()
+	// RequestId normally already lives in the request context, but keep the
+	// join key intact for internal callers that only populated gin.Context.
+	if requestID := c.GetString(common.RequestIdKey); requestID != "" && ctx.Value(common.RequestIdKey) == nil {
+		ctx = context.WithValue(ctx, common.RequestIdKey, requestID)
+	}
+	logger.LogError(ctx, relayErrorEventName+"="+common.MapToJsonStr(event))
 }
 
 func boundedRelayErrorLogText(value string, maxRunes int) string {
@@ -373,7 +494,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		startTime = time.Now()
 	}
 	useTimeSeconds := int(time.Since(startTime).Seconds())
-	if persistErr := model.RecordErrorLogWithResult(
+	persistErr := model.RecordErrorLogWithResult(
 		c,
 		userID,
 		channelID,
@@ -389,10 +510,13 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		common.GetContextKeyBool(c, constant.ContextKeyIsStream),
 		group,
 		other,
-	); persistErr != nil {
+	)
+	if persistErr != nil {
 		c.Set(relayErrorLogPersistenceFailedKey, true)
+		logRelayErrorEvent(c, userID, channelID, modelName, group, err, other, false)
 		return false
 	}
+	logRelayErrorEvent(c, userID, channelID, modelName, group, err, other, true)
 	c.Set(relayErrorLogRecordedKey, err)
 	c.Set(relayErrorLogRecordedAnyKey, true)
 	return true

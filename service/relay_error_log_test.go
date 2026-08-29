@@ -29,6 +29,47 @@ func relayErrorLogTestContext() *gin.Context {
 	return c
 }
 
+func TestBuildRelayErrorEventJoinsRequestAndLifecycleSafely(t *testing.T) {
+	c := relayErrorLogTestContext()
+	accepted := true
+	responseWritten := false
+	retry := false
+	err := types.NewErrorWithStatusCode(
+		errors.New("provider-secret-response must not enter application logs"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadGateway,
+	)
+	event := buildRelayErrorEvent(c, 4242, 19, "gpt-image-2", "image2-test", err, map[string]interface{}{
+		"upstream_called":         true,
+		"upstream_accepted_known": true,
+		"upstream_accepted":       accepted,
+		"response_written_known":  true,
+		"response_written":        responseWritten,
+		"retry_known":             true,
+		"retry":                   retry,
+		"billing_state":           RelayErrorBillingPreConsumed,
+		"charge_known":            true,
+		"charged":                 false,
+		"request_path":            "/v1/images/edits?token=must-not-enter-log",
+		"provider_body":           "provider-secret-response",
+	}, true)
+
+	require.Equal(t, relayErrorEventName, event["event"])
+	require.Equal(t, true, event["request_id_known"])
+	require.Equal(t, "relay-error-request-id", event["request_id"])
+	require.Equal(t, "upstream_server", event["error_class"])
+	require.Equal(t, true, event["upstream_called"])
+	require.Equal(t, true, event["upstream_accepted"])
+	require.Equal(t, false, event["response_written"])
+	require.Equal(t, false, event["retry"])
+	require.Equal(t, "pre_consumed", event["billing_state"])
+	require.Equal(t, false, event["charged"])
+	require.NotContains(t, event, "request_path")
+	require.NotContains(t, event, "provider_body")
+	require.NotContains(t, common.MapToJsonStr(event), "provider-secret-response")
+	require.NotContains(t, common.MapToJsonStr(event), "token=must-not-enter-log")
+}
+
 func TestRecordRelayErrorLogPersistsPreUpstreamFailure(t *testing.T) {
 	truncate(t)
 	previous := constant.ErrorLogEnabled
