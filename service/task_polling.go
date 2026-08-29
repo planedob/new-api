@@ -519,7 +519,7 @@ func isTerminalVideoTaskStatus(status model.TaskStatus) bool {
 
 func isTerminalProtectedTaskChannel(channelType int) bool {
 	switch channelType {
-	case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3, constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
+	case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3, constant.ChannelTypeTianyiH3, constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
 		return true
 	default:
 		return false

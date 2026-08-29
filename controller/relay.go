@@ -856,7 +856,7 @@ func shouldRetryTaskRelay(c *gin.Context, channel *model.Channel, taskErr *dto.T
 
 func isNoReplayTaskChannel(channelType int) bool {
 	switch channelType {
-	case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3, constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
+	case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3, constant.ChannelTypeTianyiH3, constant.ChannelTypeAPIMart, constant.ChannelTypeCodeFoxAsync:
 		return true
 	default:
 		return false

@@ -65,7 +65,10 @@ const (
 	// contract. Type 58 is retained for the existing ZZone images/seconds
 	// channel so the two upstream protocols cannot be mixed accidentally.
 	ChannelTypeSecureSkillNativeH3 = 61
-	ChannelTypeDummy               // this one is only for count, do not add any channel after this
+	// TianyiH3 uses Tianyi TokenHub's documented content/resolution/duration/ratio
+	// contract. It is intentionally separate from all existing H3 adapters.
+	ChannelTypeTianyiH3 = 62
+	ChannelTypeDummy    // this one is only for count, do not add any channel after this
 
 )
 
@@ -132,6 +135,7 @@ var ChannelBaseURLs = []string{
 	"",                                          //59 APIMart (must be configured explicitly)
 	"",                                          //60 CodeFoxAsync (must be configured explicitly)
 	"",                                          //61 SecureSkillNativeH3 (must be configured explicitly)
+	"",                                          //62 TianyiH3 (must be configured explicitly)
 }
 
 var ChannelTypeNames = map[int]string{
@@ -193,6 +197,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeAPIMart:             "APIMart",
 	ChannelTypeCodeFoxAsync:        "CodeFoxAsync",
 	ChannelTypeSecureSkillNativeH3: "SecureSkillH3",
+	ChannelTypeTianyiH3:            "TianyiH3",
 }
 
 func GetChannelTypeName(channelType int) string {

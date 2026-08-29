@@ -41,6 +41,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/secureskill"
 	tasksora "github.com/QuantumNous/new-api/relay/channel/task/sora"
 	"github.com/QuantumNous/new-api/relay/channel/task/suno"
+	"github.com/QuantumNous/new-api/relay/channel/task/tianyi_h3"
 	taskvertex "github.com/QuantumNous/new-api/relay/channel/task/vertex"
 	taskVidu "github.com/QuantumNous/new-api/relay/channel/task/vidu"
 	"github.com/QuantumNous/new-api/relay/channel/tencent"
@@ -164,6 +165,8 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 			return &hailuo.TaskAdaptor{}
 		case constant.ChannelTypeSecureSkill, constant.ChannelTypeSecureSkillNativeH3:
 			return &secureskill.TaskAdaptor{}
+		case constant.ChannelTypeTianyiH3:
+			return &tianyi_h3.TaskAdaptor{}
 		case constant.ChannelTypeAPIMart:
 			return &apimart.TaskAdaptor{}
 		case constant.ChannelTypeCodeFoxAsync:

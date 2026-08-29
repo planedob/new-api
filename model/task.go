@@ -177,6 +177,7 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeSecureSkill ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeSecureSkillNativeH3 ||
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeTianyiH3 ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeAPIMart ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeCodeFoxAsync {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
