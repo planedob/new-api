@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,61 @@ func TestRecordRelayErrorLogRedactsProviderControlledCodeEndToEnd(t *testing.T) 
 	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
 	require.Equal(t, "unclassified_error", other["error_code"])
 	require.NotContains(t, other, "provider_error_code")
+}
+
+func TestRecordRelayErrorLogRedactsUntrustedDimensionsEndToEnd(t *testing.T) {
+	truncate(t)
+	previousErrorLog := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrorLog })
+
+	var output bytes.Buffer
+	common.LogWriterMu.Lock()
+	previousWriter := gin.DefaultWriter
+	previousErrorWriter := gin.DefaultErrorWriter
+	gin.DefaultWriter = &output
+	gin.DefaultErrorWriter = &output
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultWriter = previousWriter
+		gin.DefaultErrorWriter = previousErrorWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	c := relayErrorLogTestContext()
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("provider body https://provider.invalid/secret?token=must-not-enter-log"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadGateway,
+	)
+	require.True(t, RecordRelayErrorLog(c, relayErr, RelayErrorLogOptions{
+		Stage:     "upstream",
+		ModelName: "sk-provider-secret-0123456789abcdef",
+		Group:     "https://provider.invalid/group?token=must-not-enter-log",
+		Extra: map[string]interface{}{
+			"requested_model":            "AIzaSy-provider-secret-0123456789abcdef",
+			"selection_group":            "group-safe",
+			"image2_candidate_decisions": "44:quality_unsupported,32:resolution_unsupported",
+			"image2_request_capability":  "operation=generations resolution=2048 quality=high n=1",
+		},
+	}))
+
+	var row model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", "relay-error-request-id").First(&row).Error)
+	require.Empty(t, row.ModelName)
+	require.Empty(t, row.Group)
+	require.NotContains(t, row.Content, "provider.invalid")
+	require.NotContains(t, row.Other, "provider.invalid")
+	require.NotContains(t, row.Other, "provider-secret")
+	require.NotContains(t, output.String(), "provider.invalid")
+	require.NotContains(t, output.String(), "provider-secret")
+
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(row.Other, &other))
+	require.Equal(t, "group-safe", other["selection_group"])
+	require.Equal(t, "44:quality_unsupported,32:resolution_unsupported", other["image2_candidate_decisions"])
+	require.NotContains(t, other, "requested_model")
 }
 
 func TestRecordRelayErrorLogPersistsPreUpstreamFailure(t *testing.T) {

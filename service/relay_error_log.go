@@ -20,6 +20,15 @@ import (
 
 var relayErrorClassificationToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
 
+// Relay diagnostics are classification-only. Reject clear URL, body and
+// credential markers before values reach either the application log or the
+// error-log table; length limiting alone is not a confidentiality boundary.
+var relaySensitiveDiagnosticPattern = regexp.MustCompile(`(?i)(?:https?://|wss?://|data:[^\s,]+|-----begin|(?:api[_-]?key|access[_-]?token|authorization|bearer|cookie|password|passwd|secret|prompt|image|body)\s*[:=]|(?:^|[^a-z0-9])(sk-[a-z0-9_-]{16,}|AIza[a-z0-9_-]{20,}|gh[pousr]_[a-z0-9_]{20,}|xox[baprs]-[a-z0-9-]{20,})(?:$|[^a-z0-9]))`)
+
+// A long compact scalar is not a useful diagnostic dimension and commonly
+// represents a credential without a well-known provider prefix.
+var relayOpaqueCredentialPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,}$`)
+
 const (
 	relayErrorLogRecordedKey          = "relay_error_log_recorded_error"
 	relayErrorLogRecordedAnyKey       = "relay_error_log_recorded_any"
@@ -134,7 +143,9 @@ func safeRelayErrorLogExtra(extra map[string]interface{}) map[string]interface{}
 		}
 		switch typed := value.(type) {
 		case string:
-			safe[key] = boundedRelayErrorLogText(typed, maxRelayErrorLogExtraRunes)
+			if value := safeRelayDiagnosticText(typed, maxRelayErrorLogExtraRunes); value != "" {
+				safe[key] = value
+			}
 		case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 			safe[key] = typed
 		case float32:
@@ -275,6 +286,23 @@ func safeRelayInternalErrorCode(code types.ErrorCode) string {
 	return string(code)
 }
 
+var relayInternalErrorTypeAllowlist = map[types.ErrorType]struct{}{
+	types.ErrorTypeNewAPIError:     {},
+	types.ErrorTypeOpenAIError:     {},
+	types.ErrorTypeClaudeError:     {},
+	types.ErrorTypeMidjourneyError: {},
+	types.ErrorTypeGeminiError:     {},
+	types.ErrorTypeRerankError:     {},
+	types.ErrorTypeUpstreamError:   {},
+}
+
+func safeRelayInternalErrorType(errorType types.ErrorType) string {
+	if _, ok := relayInternalErrorTypeAllowlist[errorType]; !ok {
+		return ""
+	}
+	return string(errorType)
+}
+
 func safeRelayProviderClassification(value string, allowlist map[string]struct{}) string {
 	value = strings.TrimSpace(value)
 	if _, ok := allowlist[value]; !ok {
@@ -283,14 +311,99 @@ func safeRelayProviderClassification(value string, allowlist map[string]struct{}
 	return value
 }
 
+func safeRelayDiagnosticText(value string, maxRunes int) string {
+	value = boundedRelayErrorLogText(value, maxRunes)
+	if value == "" || relaySensitiveDiagnosticPattern.MatchString(value) {
+		return ""
+	}
+	if relayOpaqueCredentialPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
+func safeRelayDimensionText(value string) string {
+	return safeRelayDiagnosticText(value, maxRelayErrorLogDimensionRunes)
+}
+
+var relayErrorStageAllowlist = map[string]struct{}{
+	"authentication":     {},
+	"distribution":       {},
+	"request_middleware": {},
+	"request_validation": {},
+	"pre_consume":        {},
+	"rate_limit":         {},
+	"channel_selection":  {},
+	"response_audit":     {},
+	"upstream":           {},
+}
+
+func safeRelayStage(stage string) string {
+	if _, ok := relayErrorStageAllowlist[stage]; !ok {
+		return "unknown"
+	}
+	return stage
+}
+
 // safeRelayErrorEventValue copies only scalar values from the already
 // allowlisted error-log fields. The application log is an operational search
 // surface, so it must not inherit arbitrary values from Extra or provider
 // responses.
-func safeRelayErrorEventValue(value interface{}) (interface{}, bool) {
+func safeRelayErrorEventValue(key string, value interface{}) (interface{}, bool) {
 	switch typed := value.(type) {
 	case string:
-		return boundedRelayErrorLogText(typed, maxRelayErrorLogExtraRunes), true
+		switch key {
+		case "error_stage":
+			value := safeRelayStage(typed)
+			return value, true
+		case "upstream_state":
+			if typed == "not_called" || typed == "called" || typed == "accepted" {
+				return typed, true
+			}
+			return nil, false
+		case "task_state":
+			value := normalizeRelayTaskState(typed)
+			return value, true
+		case "refund_state":
+			value := normalizeRelayRefundState(typed)
+			return value, true
+		case "billing_state":
+			value := string(normalizeRelayErrorBillingState(RelayErrorBillingState(typed)))
+			return value, true
+		case "failure_scope":
+			if typed == "pre_upstream" || typed == "upstream_response" {
+				return typed, true
+			}
+			return nil, false
+		case "request_route":
+			if typed == "images" {
+				return typed, true
+			}
+			return nil, false
+		case "request_method":
+			if typed == http.MethodGet || typed == http.MethodPost || typed == http.MethodPut || typed == http.MethodPatch || typed == http.MethodDelete {
+				return typed, true
+			}
+			return nil, false
+		case "image2_response_failure":
+			if _, ok := image2ResponseFailureAllowlist[typed]; ok {
+				return typed, true
+			}
+			return nil, false
+		case "requested_model", "selection_group":
+			value := safeRelayDimensionText(typed)
+			return value, value != ""
+		}
+		if key == "provider_error_type" {
+			value := safeRelayProviderClassification(typed, relayProviderErrorTypeAllowlist)
+			return value, value != ""
+		}
+		if key == "provider_error_code" {
+			value := safeRelayProviderClassification(typed, relayProviderErrorCodeAllowlist)
+			return value, value != ""
+		}
+		value := safeRelayDiagnosticText(typed, maxRelayErrorLogExtraRunes)
+		return value, value != ""
 	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return typed, true
 	case float32:
@@ -323,8 +436,8 @@ func buildRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, grou
 		"persisted":     persisted,
 		"user_id":       userID,
 		"channel_id":    channelID,
-		"model":         boundedRelayErrorLogText(modelName, maxRelayErrorLogDimensionRunes),
-		"group":         boundedRelayErrorLogText(group, maxRelayErrorLogDimensionRunes),
+		"model":         safeRelayDimensionText(modelName),
+		"group":         safeRelayDimensionText(group),
 	}
 	requestID := ""
 	if c != nil {
@@ -336,7 +449,7 @@ func buildRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, grou
 	}
 	if err != nil {
 		event["status_code"] = err.StatusCode
-		if errorType := safeRelayErrorClassificationToken(string(err.GetErrorType())); errorType != "" {
+		if errorType := safeRelayInternalErrorType(err.GetErrorType()); errorType != "" {
 			event["error_type"] = errorType
 		}
 		if errorCode := safeRelayInternalErrorCode(err.GetErrorCode()); errorCode != "" {
@@ -349,7 +462,7 @@ func buildRelayErrorEvent(c *gin.Context, userID, channelID int, modelName, grou
 		if !ok {
 			continue
 		}
-		if safe, ok := safeRelayErrorEventValue(value); ok {
+		if safe, ok := safeRelayErrorEventValue(key, value); ok {
 			event[key] = safe
 		}
 	}
@@ -474,12 +587,12 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	if modelName == "" {
 		modelName = c.GetString("original_model")
 	}
-	modelName = boundedRelayErrorLogText(modelName, maxRelayErrorLogDimensionRunes)
+	modelName = safeRelayDimensionText(modelName)
 	group := options.Group
 	if group == "" {
 		group = c.GetString("group")
 	}
-	group = boundedRelayErrorLogText(group, maxRelayErrorLogDimensionRunes)
+	group = safeRelayDimensionText(group)
 
 	channelID := 0
 	channelName := ""
@@ -487,7 +600,7 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 	isMultiKey := false
 	if options.Channel != nil {
 		channelID = options.Channel.ChannelId
-		channelName = options.Channel.ChannelName
+		channelName = safeRelayDimensionText(options.Channel.ChannelName)
 		channelType = options.Channel.ChannelType
 		isMultiKey = options.Channel.IsMultiKey
 	}
@@ -504,8 +617,8 @@ func RecordRelayErrorLog(c *gin.Context, err *types.NewAPIError, options RelayEr
 		other["request_path"] = c.Request.URL.Path
 	}
 	other["event_version"] = relayErrorEventVersion
-	other["error_stage"] = options.Stage
-	other["error_type"] = err.GetErrorType()
+	other["error_stage"] = safeRelayStage(options.Stage)
+	other["error_type"] = safeRelayInternalErrorType(err.GetErrorType())
 	safeErrorCode := safeRelayInternalErrorCode(err.GetErrorCode())
 	if safeErrorCode == "" {
 		safeErrorCode = relayErrorUnclassifiedCode
@@ -638,9 +751,9 @@ func requestMethod(c *gin.Context) string {
 
 func image2CapabilitySummary(capability Image2RequestCapability) string {
 	return fmt.Sprintf("operation=%s resolution=%s quality=%s n=%d",
-		boundedRelayErrorLogText(capability.Operation, 32),
-		boundedRelayErrorLogText(capability.Resolution, 32),
-		boundedRelayErrorLogText(capability.Quality, 32),
+		safeRelayDiagnosticText(capability.Operation, 32),
+		safeRelayDiagnosticText(capability.Resolution, 32),
+		safeRelayDiagnosticText(capability.Quality, 32),
 		capability.N,
 	)
 }
