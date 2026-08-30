@@ -616,6 +616,15 @@ export function ChannelMutateDrawer({
       }
     }
 
+    // Type 62 (Tianyi TokenHub MiniMax H3) - use the documented API root.
+    // The adapter appends the /v1 endpoints and accepts this host form.
+    if (currentType === 62) {
+      const currentBaseUrlValue = form.getValues('base_url')
+      if (!currentBaseUrlValue || currentBaseUrlValue === '') {
+        form.setValue('base_url', 'https://ai.ctaigw.cn')
+      }
+    }
+
     // Type 18 (Xunfei) - set default other (version)
     if (currentType === 18) {
       const currentOther = form.getValues('other')

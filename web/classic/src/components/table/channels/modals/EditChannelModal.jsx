@@ -155,6 +155,8 @@ function type2secretPrompt(type) {
       return '按照如下格式输入: AccessKey|SecretAccessKey';
     case 57:
       return '请输入 JSON 格式的 OAuth 凭据（必须包含 access_token 和 account_id）';
+    case 62:
+      return '请输入天翼云 TokenHub App Key';
     default:
       return '请输入渠道对应的鉴权密钥';
   }
@@ -672,6 +674,13 @@ const EditChannelModal = (props) => {
           setInputs((prevInputs) => ({
             ...prevInputs,
             base_url: 'https://ark.cn-beijing.volces.com',
+          }));
+          break;
+        case 62:
+          localModels = ['minimax-h3'];
+          setInputs((prevInputs) => ({
+            ...prevInputs,
+            base_url: 'https://ai.ctaigw.cn',
           }));
           break;
         default:

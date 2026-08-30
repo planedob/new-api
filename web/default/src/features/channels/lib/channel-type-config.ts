@@ -116,6 +116,18 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       baseUrl: 'Default: https://api.replicate.com',
     },
   },
+  62: {
+    id: 62,
+    name: CHANNEL_TYPES[62],
+    icon: 'minimax',
+    defaultBaseUrl: 'https://ai.ctaigw.cn',
+    supportedModels: ['minimax-h3'],
+    hints: {
+      baseUrl: 'Default: https://ai.ctaigw.cn (the adapter adds /v1 endpoints)',
+      key: 'Tianyi TokenHub App Key',
+      models: 'minimax-h3',
+    },
+  },
 }
 
 /**
