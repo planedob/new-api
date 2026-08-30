@@ -943,6 +943,13 @@ const EditChannelModal = (props) => {
           )
             ? parsedSettings.upstream_model_update_ignored_models.join(',')
             : '';
+          if (data.type === 62) {
+            data.upstream_model_update_check_enabled = false;
+            data.upstream_model_update_auto_sync_enabled = false;
+            data.upstream_model_update_last_check_time = 0;
+            data.upstream_model_update_last_detected_models = [];
+            data.upstream_model_update_ignored_models = '';
+          }
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
@@ -1065,6 +1072,10 @@ const EditChannelModal = (props) => {
 
   const fetchUpstreamModelList = async (name, options = {}) => {
     const silent = !!options.silent;
+    if (inputs.type === 62) {
+      showInfo(t('TianyiH3 使用固定模型，不支持获取上游模型列表'));
+      return null;
+    }
     // if (inputs['type'] !== 1) {
     //   showError(t('仅支持 OpenAI 接口格式'));
     //   return;
@@ -1882,6 +1893,16 @@ const EditChannelModal = (props) => {
     }
     if (typeof settings.upstream_model_update_last_check_time !== 'number') {
       settings.upstream_model_update_last_check_time = 0;
+    }
+
+    // TianyiH3 is fixed to minimax-h3 and must not retain legacy upstream
+    // model discovery/sync settings from a previous channel type.
+    if (localInputs.type === 62) {
+      settings.upstream_model_update_check_enabled = false;
+      settings.upstream_model_update_auto_sync_enabled = false;
+      settings.upstream_model_update_last_check_time = 0;
+      settings.upstream_model_update_last_detected_models = [];
+      settings.upstream_model_update_ignored_models = [];
     }
 
     localInputs.settings = JSON.stringify(settings);

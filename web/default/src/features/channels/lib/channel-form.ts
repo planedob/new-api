@@ -383,6 +383,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     }
   }
 
+  // TianyiH3 has one fixed upstream model and must never fetch or sync a
+  // provider model catalog, even when an edited channel carries stale legacy
+  // settings from a previous channel type.
+  if (formData.type === 62) {
+    settingsObj.upstream_model_update_check_enabled = false
+    settingsObj.upstream_model_update_auto_sync_enabled = false
+    settingsObj.upstream_model_update_last_check_time = 0
+    settingsObj.upstream_model_update_last_detected_models = []
+    settingsObj.upstream_model_update_ignored_models = []
+  }
+
   return JSON.stringify(settingsObj)
 }
 
