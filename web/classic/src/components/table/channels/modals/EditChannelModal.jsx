@@ -611,11 +611,10 @@ const EditChannelModal = (props) => {
     ) {
       return;
     }
-    if (name === 'models' && Array.isArray(value)) {
+    if (name === 'models' && inputs.type === 62) {
+      value = ['minimax-h3'];
+    } else if (name === 'models' && Array.isArray(value)) {
       value = Array.from(new Set(value.map((m) => (m || '').trim())));
-      if (inputs.type === 62) {
-        value = ['minimax-h3'];
-      }
     }
     if (name === 'base_url' && inputs.type === 62) {
       value = 'https://ai.ctaigw.cn';
@@ -1586,6 +1585,7 @@ const EditChannelModal = (props) => {
     if (localInputs.type === 62) {
       localInputs.models = ['minimax-h3'];
       localInputs.model_mapping = '';
+      localInputs.base_url = 'https://ai.ctaigw.cn';
     }
 
     if (localInputs.type === 57) {

@@ -1818,6 +1818,7 @@ export function ChannelMutateDrawer({
                           <Input
                             placeholder={t(FIELD_PLACEHOLDERS.BASE_URL)}
                             {...field}
+                            disabled={currentType === 62}
                           />
                         </FormControl>
                         <FormDescription>
