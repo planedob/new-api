@@ -124,6 +124,7 @@ import {
   extractMappingSourceModels,
   hasModelConfigChanged,
   findMissingModelsInMapping,
+  getFixedModelsForChannelType,
   validateModelMappingJson,
 } from '../../lib'
 import {
@@ -443,6 +444,16 @@ export function ChannelMutateDrawer({
     [currentModels]
   )
 
+  const fixedModels = useMemo(
+    () => getFixedModelsForChannelType(currentType),
+    [currentType]
+  )
+  const hasFixedModels = fixedModels.length > 0
+  const fixedModelsValue = useMemo(
+    () => formatModelsArray(fixedModels),
+    [fixedModels]
+  )
+
   const currentTypeLabel = useMemo(
     () =>
       CHANNEL_TYPE_OPTIONS.find((option) => option.value === currentType)
@@ -480,12 +491,19 @@ export function ChannelMutateDrawer({
 
   // Transform models to multi-select options
   const modelOptions = useMemo(() => {
+    if (hasFixedModels) {
+      return fixedModels.map((model) => ({
+        value: model,
+        label: model,
+      }))
+    }
+
     const allModels = new Set([...allModelsList, ...currentModelsArray])
     return Array.from(allModels).map((model) => ({
       value: model,
       label: model,
     }))
-  }, [allModelsList, currentModelsArray])
+  }, [allModelsList, currentModelsArray, fixedModels, hasFixedModels])
 
   const modelMappingGuardrail = useMemo<ModelMappingGuardrail>(() => {
     if (!currentModelMapping?.trim()) {
@@ -606,6 +624,23 @@ export function ChannelMutateDrawer({
 
   // Handle type change - set default values for specific types
   useEffect(() => {
+    if (hasFixedModels) {
+      form.setValue('models', fixedModelsValue, {
+        shouldDirty: false,
+        shouldValidate: true,
+      })
+      form.setValue('model_mapping', '', {
+        shouldDirty: false,
+        shouldValidate: true,
+      })
+      if (currentType === 62) {
+        form.setValue('base_url', 'https://ai.ctaigw.cn', {
+          shouldDirty: false,
+          shouldValidate: true,
+        })
+      }
+    }
+
     if (isEditing) return // Don't auto-set defaults when editing
 
     // Type 45 (VolcEngine) - set default base_url
@@ -632,7 +667,7 @@ export function ChannelMutateDrawer({
         form.setValue('other', 'v2.1')
       }
     }
-  }, [currentType, isEditing, form])
+  }, [currentType, fixedModelsValue, form, hasFixedModels, isEditing])
 
   // Validate base_url - warn if it ends with /v1
   useEffect(() => {
@@ -871,9 +906,12 @@ export function ChannelMutateDrawer({
   // Handle model selection change from MultiSelect
   const handleModelsChange = useCallback(
     (selected: string[]) => {
-      form.setValue('models', selected.join(','))
+      form.setValue(
+        'models',
+        hasFixedModels ? fixedModelsValue : selected.join(',')
+      )
     },
-    [form]
+    [fixedModelsValue, form, hasFixedModels]
   )
 
   // Handle successful submission
@@ -972,6 +1010,14 @@ export function ChannelMutateDrawer({
       }
 
       // Validate model_mapping JSON format
+      if (hasFixedModels) {
+        data.models = fixedModelsValue
+        data.model_mapping = ''
+        if (currentType === 62) {
+          data.base_url = 'https://ai.ctaigw.cn'
+        }
+      }
+
       const hasModelMapping =
         typeof data.model_mapping === 'string' &&
         data.model_mapping.trim() !== ''
@@ -2126,17 +2172,26 @@ export function ChannelMutateDrawer({
                     <FormItem>
                       <FormLabel>{t('Models *')}</FormLabel>
                       <FormControl>
-                        <MultiSelect
-                          options={modelOptions}
-                          selected={currentModelsArray}
-                          onChange={handleModelsChange}
-                          placeholder={t('Select models or add custom ones')}
-                        />
+                        {hasFixedModels ? (
+                          <div className='bg-muted/40 rounded-md border px-3 py-2 text-sm font-medium'>
+                            {fixedModels.join(', ')}
+                          </div>
+                        ) : (
+                          <MultiSelect
+                            options={modelOptions}
+                            selected={currentModelsArray}
+                            onChange={handleModelsChange}
+                            placeholder={t('Select models or add custom ones')}
+                          />
+                        )}
                       </FormControl>
                       <FormDescription>
-                        <div className='flex flex-col gap-2'>
-                          <span>{t(FIELD_DESCRIPTIONS.MODELS)}</span>
-                          <div className='flex flex-wrap gap-2'>
+                        {hasFixedModels ? (
+                          t('TianyiH3 uses the fixed upstream model minimax-h3.')
+                        ) : (
+                          <div className='flex flex-col gap-2'>
+                            <span>{t(FIELD_DESCRIPTIONS.MODELS)}</span>
+                            <div className='flex flex-wrap gap-2'>
                             <Button
                               type='button'
                               variant='outline'
@@ -2202,8 +2257,9 @@ export function ChannelMutateDrawer({
                                 {group.name}
                               </Button>
                             ))}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </FormDescription>
                       {modelMappingGuardrail.exposedTargetModels.length > 0 && (
                         <Alert className='mt-3 border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
@@ -2224,7 +2280,8 @@ export function ChannelMutateDrawer({
                 />
 
                 {/* Custom Model Input */}
-                <div className='flex gap-2'>
+                {!hasFixedModels && (
+                  <div className='flex gap-2'>
                   <Input
                     placeholder={t('Add custom model(s), comma-separated')}
                     value={customModel}
@@ -2244,9 +2301,11 @@ export function ChannelMutateDrawer({
                   >
                     {t('Add')}
                   </Button>
-                </div>
+                  </div>
+                )}
 
-                <FormField
+                {!hasFixedModels && (
+                  <FormField
                   control={form.control}
                   name='model_mapping'
                   render={({ field }) => (
@@ -2340,7 +2399,8 @@ export function ChannelMutateDrawer({
                       <FormMessage />
                     </FormItem>
                   )}
-                />
+                  />
+                )}
 
                 <FormField
                   control={form.control}

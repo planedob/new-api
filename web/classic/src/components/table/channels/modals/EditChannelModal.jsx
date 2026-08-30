@@ -611,11 +611,17 @@ const EditChannelModal = (props) => {
     ) {
       return;
     }
-    if (formApiRef.current) {
-      formApiRef.current.setValue(name, value);
-    }
     if (name === 'models' && Array.isArray(value)) {
       value = Array.from(new Set(value.map((m) => (m || '').trim())));
+      if (inputs.type === 62) {
+        value = ['minimax-h3'];
+      }
+    }
+    if (name === 'base_url' && inputs.type === 62) {
+      value = 'https://ai.ctaigw.cn';
+    }
+    if (formApiRef.current) {
+      formApiRef.current.setValue(name, value);
     }
 
     if (name === 'base_url' && value.endsWith('/v1')) {
@@ -681,13 +687,15 @@ const EditChannelModal = (props) => {
           setInputs((prevInputs) => ({
             ...prevInputs,
             base_url: 'https://ai.ctaigw.cn',
+            models: localModels,
+            model_mapping: '',
           }));
           break;
         default:
           localModels = getChannelModels(value);
           break;
       }
-      if (inputs.models.length === 0) {
+      if (value === 62 || inputs.models.length === 0) {
         setInputs((inputs) => ({ ...inputs, models: localModels }));
       }
       setBasicModels(localModels);
@@ -1270,7 +1278,27 @@ const EditChannelModal = (props) => {
   }, [inputs.type]);
 
   useEffect(() => {
+    if (inputs.type !== 62) return;
+    const isCanonical =
+      inputs.models.length === 1 && inputs.models[0] === 'minimax-h3';
+    if (isCanonical && !inputs.model_mapping) return;
+    setInputs((prev) => ({
+      ...prev,
+      models: ['minimax-h3'],
+      model_mapping: '',
+      base_url: 'https://ai.ctaigw.cn',
+    }));
+  }, [inputs.type, inputs.models, inputs.model_mapping]);
+
+  useEffect(() => {
     const modelMap = new Map();
+
+    if (inputs.type === 62) {
+      setModelOptions([
+        { key: 'minimax-h3', label: 'minimax-h3', value: 'minimax-h3' },
+      ]);
+      return;
+    }
 
     originModelOptions.forEach((option) => {
       const v = (option.value || '').trim();
@@ -1554,6 +1582,11 @@ const EditChannelModal = (props) => {
     const formValues = formApiRef.current ? formApiRef.current.getValues() : {};
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
+
+    if (localInputs.type === 62) {
+      localInputs.models = ['minimax-h3'];
+      localInputs.model_mapping = '';
+    }
 
     if (localInputs.type === 57) {
       if (batch) {
@@ -3482,10 +3515,20 @@ const EditChannelModal = (props) => {
                       rules={[{ required: true, message: t('请选择模型') }]}
                       multiple
                       filter={selectFilter}
-                      allowCreate
+                      allowCreate={inputs.type !== 62}
                       autoClearSearchValue={false}
                       searchPosition='dropdown'
-                      optionList={modelOptions}
+                      optionList={
+                        inputs.type === 62
+                          ? [
+                              {
+                                key: 'minimax-h3',
+                                label: 'minimax-h3',
+                                value: 'minimax-h3',
+                              },
+                            ]
+                          : modelOptions
+                      }
                       onSearch={(value) => setModelSearchValue(value)}
                       innerBottomSlot={
                         modelSearchHintText ? (
@@ -3495,7 +3538,12 @@ const EditChannelModal = (props) => {
                         ) : null
                       }
                       style={{ width: '100%' }}
-                      onChange={(value) => handleInputChange('models', value)}
+                      onChange={(value) =>
+                        handleInputChange(
+                          'models',
+                          inputs.type === 62 ? ['minimax-h3'] : value,
+                        )
+                      }
                       renderSelectedItem={(optionNode) => {
                         const modelName = String(optionNode?.value ?? '');
                         return {
@@ -3524,6 +3572,9 @@ const EditChannelModal = (props) => {
                         };
                       }}
                       extraText={
+                        inputs.type === 62 ? (
+                          t('TianyiH3 固定使用上游模型 minimax-h3。')
+                        ) : (
                         <Space>
                           <Button
                             size='small'
@@ -3582,11 +3633,12 @@ const EditChannelModal = (props) => {
                             </Button>
                           </Dropdown>
                         </Space>
+                        )
                       }
                     />
 
                   {/* Custom Model Name - Core Config */}
-                  <Form.Input
+                  {inputs.type !== 62 && <Form.Input
                     field='custom_model'
                     label={t('自定义模型名称')}
                     placeholder={t('输入自定义模型名称')}
@@ -3601,7 +3653,7 @@ const EditChannelModal = (props) => {
                         {t('填入')}
                       </Button>
                     }
-                  />
+                  />}
 
                   {/* Groups - Core Config */}
                   <Form.Select
@@ -3620,7 +3672,7 @@ const EditChannelModal = (props) => {
                   />
 
                   {/* Model Mapping - Core Config */}
-                  <JSONEditor
+                  {inputs.type !== 62 && <JSONEditor
                     key={`model_mapping-${isEdit ? channelId : 'new'}`}
                     field='model_mapping'
                     label={t('模型重定向')}
@@ -3662,7 +3714,7 @@ const EditChannelModal = (props) => {
                     extraText={t(
                       '键为请求中的模型名称，值为要替换的模型名称',
                     )}
-                  />
+                  />}
 
                   {/* Auto Ban - Core Config */}
                   <Form.Switch

@@ -144,6 +144,15 @@ export function getChannelTypeConfig(type: number): ChannelTypeConfig {
 }
 
 /**
+ * Return the canonical model list for channel types whose adapter does not
+ * support arbitrary model selection. Always return a fresh array so callers
+ * cannot mutate the shared channel type configuration.
+ */
+export function getFixedModelsForChannelType(type: number): string[] {
+  return [...(CHANNEL_TYPE_CONFIGS[type]?.supportedModels || [])]
+}
+
+/**
  * Check if channel type requires organization field
  */
 export function requiresOrganization(type: number): boolean {

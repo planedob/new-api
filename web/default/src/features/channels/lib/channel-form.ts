@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { CHANNEL_STATUS, MODEL_FETCHABLE_TYPES } from '../constants'
 import type { Channel } from '../types'
+import { getFixedModelsForChannelType } from './channel-type-config'
+import { formatModelsArray } from './model-mapping-validation'
 
 // ============================================================================
 // Form Validation Schema
@@ -394,16 +396,22 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
   channel: Partial<Channel>
 } {
   const mode = formData.multi_key_mode || 'single'
+  const fixedModels = getFixedModelsForChannelType(formData.type)
+  const models = fixedModels.length
+    ? formatModelsArray(fixedModels)
+    : formData.models
+  const modelMapping = fixedModels.length ? null : formData.model_mapping || null
+  const baseUrl = formData.type === 62 ? 'https://ai.ctaigw.cn' : formData.base_url
 
   const channel: Partial<Channel> = {
     name: formData.name,
     type: formData.type,
-    base_url: formData.base_url || null,
+    base_url: baseUrl || null,
     key: formData.key,
     openai_organization: formData.openai_organization || null,
-    models: formData.models,
+    models,
     group: formatGroups(formData.group),
-    model_mapping: formData.model_mapping || null,
+    model_mapping: modelMapping,
     priority: formData.priority || null,
     weight: formData.weight || null,
     test_model: formData.test_model || null,
@@ -443,15 +451,22 @@ export function transformFormDataToUpdatePayload(
   formData: ChannelFormValues,
   channelId: number
 ): Partial<Channel> {
+  const fixedModels = getFixedModelsForChannelType(formData.type)
+  const models = fixedModels.length
+    ? formatModelsArray(fixedModels)
+    : formData.models
+  const modelMapping = fixedModels.length ? null : formData.model_mapping || null
+  const baseUrl = formData.type === 62 ? 'https://ai.ctaigw.cn' : formData.base_url
+
   const payload: Partial<Channel> = {
     id: channelId,
     name: formData.name,
     type: formData.type,
-    base_url: formData.base_url || null,
+    base_url: baseUrl || null,
     openai_organization: formData.openai_organization || null,
-    models: formData.models,
+    models,
     group: formatGroups(formData.group),
-    model_mapping: formData.model_mapping || null,
+    model_mapping: modelMapping,
     priority: formData.priority || null,
     weight: formData.weight || null,
     test_model: formData.test_model || null,
