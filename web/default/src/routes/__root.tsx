@@ -16,11 +16,15 @@ import { getSetupStatus } from '@/features/setup/api'
 
 function RootComponent() {
   // Load system configuration (logo, system name, etc.) from backend
-  const isLocalWorkbench =
+  const isLocalFixturePage =
     typeof window !== 'undefined' &&
+    import.meta.env.VITE_MODEL_WORKBENCH_LOCAL_FIXTURE === 'true' &&
+    ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname) &&
     (window.location.pathname === '/model-workbench' ||
-      window.location.pathname.startsWith('/model-workbench/'))
-  useSystemConfig({ autoLoad: !isLocalWorkbench })
+      window.location.pathname.startsWith('/model-workbench/') ||
+      window.location.pathname === '/pricing' ||
+      window.location.pathname.startsWith('/pricing/'))
+  useSystemConfig({ autoLoad: !isLocalFixturePage })
 
   return (
     <ThemeCustomizationProvider>
@@ -75,9 +79,16 @@ export const Route = createRootRouteWithContext<{
   // 应用初始化与路由解析前统一校验会话
   beforeLoad: async ({ location }) => {
     const pathname = location?.pathname || ''
-    const isLocalWorkbench = pathname === '/model-workbench' || pathname.startsWith('/model-workbench/')
+    const isLocalFixturePage =
+      import.meta.env.VITE_MODEL_WORKBENCH_LOCAL_FIXTURE === 'true' &&
+      typeof window !== 'undefined' &&
+      ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname) &&
+      (pathname === '/model-workbench' ||
+        pathname.startsWith('/model-workbench/') ||
+        pathname === '/pricing' ||
+        pathname.startsWith('/pricing/'))
     const needsSetupCheck =
-      !setupStatusChecked && !pathname.startsWith('/setup') && !isLocalWorkbench
+      !setupStatusChecked && !pathname.startsWith('/setup') && !isLocalFixturePage
 
     // 用户信息已通过 auth-store 从 localStorage 恢复
     // 如果 auth.user 存在，说明用户已登录（有缓存的用户数据）

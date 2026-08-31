@@ -1,6 +1,7 @@
 import z from 'zod'
 import { createFileRoute } from '@tanstack/react-router'
 import { Pricing } from '@/features/pricing'
+import { ModelWorkbench } from '@/features/model-workbench'
 
 const pricingSearchSchema = z.object({
   search: z.string().optional(),
@@ -15,7 +16,16 @@ const pricingSearchSchema = z.object({
   rechargePrice: z.boolean().optional(),
 })
 
+function PricingPage() {
+  const localModelSquareEnabled =
+    import.meta.env.VITE_MODEL_WORKBENCH_LOCAL_FIXTURE === 'true' &&
+    typeof window !== 'undefined' &&
+    ['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)
+
+  return localModelSquareEnabled ? <ModelWorkbench /> : <Pricing />
+}
+
 export const Route = createFileRoute('/pricing/')({
   validateSearch: pricingSearchSchema,
-  component: Pricing,
+  component: PricingPage,
 })
