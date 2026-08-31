@@ -23,9 +23,18 @@ func GetUserSelectableTokenGroups(userId int) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	scopedGroups := model.TokenGroupVisibilityScopedGroups()
 	now := common.GetTimestamp()
 	for _, policy := range policies {
-		if _, usable := groups[policy.Group]; !usable {
+		_, scoped := scopedGroups[policy.Group]
+		if len(scopedGroups) > 0 && !scoped {
+			continue
+		}
+		_, usable := groups[policy.Group]
+		// The legacy all-policy mode remains an intersection. In explicit scoped
+		// mode, a targeted policy may grant its named group to a named user even
+		// when that group is intentionally absent from the global selectable set.
+		if !usable && !(len(scopedGroups) > 0 && policy.Visibility == model.TokenGroupVisibilityTargeted) {
 			continue
 		}
 		inWindow := (policy.StartTime == 0 || now >= policy.StartTime) &&
@@ -47,7 +56,11 @@ func GetUserSelectableTokenGroups(userId int) (map[string]string, error) {
 					break
 				}
 			}
-			if !allowed {
+			if allowed {
+				if !usable {
+					groups[policy.Group] = "定向测试分组"
+				}
+			} else {
 				delete(groups, policy.Group)
 			}
 		}

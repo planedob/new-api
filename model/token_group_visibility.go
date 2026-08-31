@@ -45,6 +45,22 @@ func TokenGroupVisibilityEnabled() bool {
 	return common.GetEnvOrDefaultBool("TOKEN_GROUP_VISIBILITY_ENABLED", false)
 }
 
+// TokenGroupVisibilityScopedGroups optionally limits policy enforcement to an
+// explicit comma-separated allowlist. An empty value preserves the original
+// all-policy behavior. This is intended for fail-closed, one-group rollouts:
+// policies outside the allowlist remain stored but are not activated.
+func TokenGroupVisibilityScopedGroups() map[string]struct{} {
+	raw := common.GetEnvOrDefaultString("TOKEN_GROUP_VISIBILITY_SCOPED_GROUPS", "")
+	groups := make(map[string]struct{})
+	for _, group := range strings.Split(raw, ",") {
+		group = strings.TrimSpace(group)
+		if group != "" {
+			groups[group] = struct{}{}
+		}
+	}
+	return groups
+}
+
 // GetTokenGroupVisibilityPolicies deliberately reads through to the database.
 // Visibility is an authorization boundary and this service can run on multiple
 // nodes; an in-process cache could leave a node enforcing stale permissions.

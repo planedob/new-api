@@ -316,6 +316,86 @@ func TestPublicPolicyCannotExpandBaseGroupPermission(t *testing.T) {
 	}
 }
 
+func TestScopedTargetedPolicyCanGrantNonGlobalGroupOnlyToTarget(t *testing.T) {
+	setupTokenGroupVisibilityTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
+	t.Setenv("TOKEN_GROUP_VISIBILITY_SCOPED_GROUPS", "svip")
+	target := createVisibilityTestUser(t, 1, "alice", "default")
+	nonTarget := createVisibilityTestUser(t, 2, "bob", "default")
+	if _, globallyUsable := service.GetUserUsableGroups(target.Group)["svip"]; globallyUsable {
+		t.Fatal("test requires svip to be absent from the global selectable set")
+	}
+	if err := model.SaveTokenGroupVisibilityPolicy(model.TokenGroupVisibilityPolicy{
+		Group: "svip", Visibility: model.TokenGroupVisibilityTargeted, Usernames: []string{"alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	targetGroups, err := service.GetUserSelectableTokenGroups(target.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := targetGroups["svip"]; !ok {
+		t.Fatal("scoped targeted user must receive the non-global group")
+	}
+	nonTargetGroups, err := service.GetUserSelectableTokenGroups(nonTarget.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nonTargetGroups["svip"]; ok {
+		t.Fatal("non-target user must not receive the scoped group")
+	}
+}
+
+func TestAddTokenEnforcesScopedTargetedNonGlobalGroup(t *testing.T) {
+	setupTokenGroupVisibilityTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
+	t.Setenv("TOKEN_GROUP_VISIBILITY_SCOPED_GROUPS", "svip")
+	createVisibilityTestUser(t, 1, "alice", "default")
+	createVisibilityTestUser(t, 2, "bob", "default")
+	if err := model.SaveTokenGroupVisibilityPolicy(model.TokenGroupVisibilityPolicy{
+		Group: "svip", Visibility: model.TokenGroupVisibilityTargeted, Usernames: []string{"alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, rejected := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name": "scoped-rejected", "group": "svip", "expired_time": -1, "unlimited_quota": true,
+	}, 2)
+	AddToken(ctx)
+	if decodeAPIResponse(t, rejected).Success {
+		t.Fatal("non-target must not create a token in the scoped group")
+	}
+
+	ctx, allowed := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name": "scoped-allowed", "group": "svip", "expired_time": -1, "unlimited_quota": true,
+	}, 1)
+	AddToken(ctx)
+	if !decodeAPIResponse(t, allowed).Success {
+		t.Fatalf("target must be able to create a token in the scoped group: %s", allowed.Body.String())
+	}
+}
+
+func TestScopedPolicyDoesNotActivateStoredPoliciesOutsideScope(t *testing.T) {
+	setupTokenGroupVisibilityTestDB(t)
+	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
+	t.Setenv("TOKEN_GROUP_VISIBILITY_SCOPED_GROUPS", "svip")
+	user := createVisibilityTestUser(t, 1, "alice", "default")
+	if err := model.SaveTokenGroupVisibilityPolicy(model.TokenGroupVisibilityPolicy{
+		Group: "default", Visibility: model.TokenGroupVisibilityHidden,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := service.GetUserSelectableTokenGroups(user.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := groups["default"]; !ok {
+		t.Fatal("stored policy outside the explicit scope must remain inactive")
+	}
+}
+
 func TestSelectableAutoGroupsExcludeTargetedGroupsForNonTargets(t *testing.T) {
 	setupTokenGroupVisibilityTestDB(t)
 	t.Setenv("TOKEN_GROUP_VISIBILITY_ENABLED", "true")
