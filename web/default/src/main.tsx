@@ -95,6 +95,12 @@ const rootElement = document.getElementById('root')!
 ;(function initSystemBranding() {
   try {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
+    if (
+      window.location.pathname === '/model-workbench' ||
+      window.location.pathname.startsWith('/model-workbench/')
+    ) {
+      return
+    }
     const apply = (name: string) => {
       document.title = name
       const metaTitle = document.querySelector(

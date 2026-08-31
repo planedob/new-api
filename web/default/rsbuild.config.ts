@@ -14,6 +14,10 @@ export default defineConfig(({ envMode }) => {
     'http://localhost:3000'
 
   const isProd = envMode === 'production'
+  const localFixtureEnabled =
+    process.env.VITE_MODEL_WORKBENCH_LOCAL_FIXTURE ||
+    env.rawPublicVars.VITE_MODEL_WORKBENCH_LOCAL_FIXTURE ||
+    'false'
   const devProxy = Object.fromEntries(
     (['/api', '/mj', '/pg'] as const).map((key) => [
       key,
@@ -53,6 +57,11 @@ export default defineConfig(({ envMode }) => {
     source: {
       entry: {
         index: './src/main.tsx',
+      },
+      define: {
+        'import.meta.env.VITE_MODEL_WORKBENCH_LOCAL_FIXTURE': JSON.stringify(
+          localFixtureEnabled
+        ),
       },
     },
     resolve: {
