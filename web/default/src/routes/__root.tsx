@@ -16,7 +16,11 @@ import { getSetupStatus } from '@/features/setup/api'
 
 function RootComponent() {
   // Load system configuration (logo, system name, etc.) from backend
-  useSystemConfig({ autoLoad: true })
+  const isLocalWorkbench =
+    typeof window !== 'undefined' &&
+    (window.location.pathname === '/model-workbench' ||
+      window.location.pathname.startsWith('/model-workbench/'))
+  useSystemConfig({ autoLoad: !isLocalWorkbench })
 
   return (
     <ThemeCustomizationProvider>
@@ -71,8 +75,9 @@ export const Route = createRootRouteWithContext<{
   // 应用初始化与路由解析前统一校验会话
   beforeLoad: async ({ location }) => {
     const pathname = location?.pathname || ''
+    const isLocalWorkbench = pathname === '/model-workbench' || pathname.startsWith('/model-workbench/')
     const needsSetupCheck =
-      !setupStatusChecked && !pathname.startsWith('/setup')
+      !setupStatusChecked && !pathname.startsWith('/setup') && !isLocalWorkbench
 
     // 用户信息已通过 auth-store 从 localStorage 恢复
     // 如果 auth.user 存在，说明用户已登录（有缓存的用户数据）
