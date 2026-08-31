@@ -102,6 +102,8 @@ export function ModelWorkbench() {
   const [imageResolution, setImageResolution] = useState("1024x1024");
   const [imageQuality, setImageQuality] = useState("auto");
   const [imageQuantity, setImageQuantity] = useState("1");
+  const [editReferenceName, setEditReferenceName] =
+    useState(LOCAL_IMAGE_FIXTURE);
   const [videoPrompt, setVideoPrompt] = useState("一段平稳推进的城市夜景镜头");
   const [videoRatio, setVideoRatio] = useState("16:9");
   const [videoResolution, setVideoResolution] = useState("2K");
@@ -137,6 +139,7 @@ export function ModelWorkbench() {
       : LOCAL_CATALOG.some(
             (item) =>
               item.model === selectedModel &&
+              item.testable &&
               item.operations.includes(tab === "image" ? imageOperation : tab),
           )
         ? selectedModel
@@ -145,6 +148,7 @@ export function ModelWorkbench() {
           : "gpt-4o-mini";
 
   const selectModel = (item: CatalogModel) => {
+    if (!item.testable || item.verified !== "local_fixture") return;
     setSelected(item);
     setSelectedModel(item.model);
     setSurface("workbench");
@@ -477,8 +481,12 @@ export function ModelWorkbench() {
                         详情
                         <ChevronRight className="size-3.5" />
                       </Button>
-                      <Button size="sm" onClick={() => selectModel(item)}>
-                        本地体验
+                      <Button
+                        size="sm"
+                        disabled={!item.testable}
+                        onClick={() => selectModel(item)}
+                      >
+                        {item.testable ? "本地体验" : "待本地验证"}
                       </Button>
                     </div>
                   </article>
@@ -511,8 +519,12 @@ export function ModelWorkbench() {
                         </td>
                         <td>{item.verified}</td>
                         <td className="p-4">
-                          <Button size="sm" onClick={() => selectModel(item)}>
-                            本地体验
+                          <Button
+                            size="sm"
+                            disabled={!item.testable}
+                            onClick={() => selectModel(item)}
+                          >
+                            {item.testable ? "本地体验" : "待本地验证"}
                           </Button>
                         </td>
                       </tr>
@@ -536,8 +548,11 @@ export function ModelWorkbench() {
                       {selected.group} · {selected.price_summary}
                     </p>
                   </div>
-                  <Button onClick={() => selectModel(selected)}>
-                    进入本地工作台
+                  <Button
+                    disabled={!selected.testable}
+                    onClick={() => selectModel(selected)}
+                  >
+                    {selected.testable ? "进入本地工作台" : "暂不可体验"}
                     <ChevronRight className="size-4" />
                   </Button>
                 </div>
@@ -626,8 +641,9 @@ export function ModelWorkbench() {
                           setSelectedModel(event.target.value)
                         }
                       >
-                        {LOCAL_CATALOG.filter((item) =>
-                          item.operations.includes("chat"),
+                        {LOCAL_CATALOG.filter(
+                          (item) =>
+                            item.testable && item.operations.includes("chat"),
                         ).map((item) => (
                           <option key={item.model}>{item.model}</option>
                         ))}
@@ -684,8 +700,10 @@ export function ModelWorkbench() {
                           setSelectedModel(event.target.value)
                         }
                       >
-                        {LOCAL_CATALOG.filter((item) =>
-                          item.operations.includes(imageOperation),
+                        {LOCAL_CATALOG.filter(
+                          (item) =>
+                            item.testable &&
+                            item.operations.includes(imageOperation),
                         ).map((item) => (
                           <option key={item.model}>{item.model}</option>
                         ))}
@@ -703,7 +721,29 @@ export function ModelWorkbench() {
                       <div className="rounded-lg border border-dashed p-3 text-xs">
                         <div className="font-medium">固定参考图</div>
                         <div className="text-muted-foreground mt-1">
-                          {LOCAL_IMAGE_FIXTURE} · 256×256 PNG · multipart
+                          {editReferenceName} · 256×256 PNG · multipart
+                        </div>
+                        <input
+                          aria-label="上传参考 PNG"
+                          className="mt-3 block w-full text-xs"
+                          type="file"
+                          accept="image/png"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (!file) {
+                              setEditReferenceName(LOCAL_IMAGE_FIXTURE);
+                              return;
+                            }
+                            setEditReferenceName(
+                              file.type === "image/png"
+                                ? `${file.name}（本地固定 fixture 仍为 ${LOCAL_IMAGE_FIXTURE}）`
+                                : "仅支持 PNG；仍使用本地固定 fixture",
+                            );
+                          }}
+                        />
+                        <div className="text-muted-foreground mt-2">
+                          本地模拟不会上传或读取该文件；请求始终使用固定 256×256
+                          PNG fixture。
                         </div>
                       </div>
                     )}

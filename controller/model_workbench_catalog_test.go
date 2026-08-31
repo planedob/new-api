@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +47,26 @@ func TestGetLocalModelCatalogIsRedacted(t *testing.T) {
 	}
 	if !strings.Contains(body, "LOCAL_FIXTURE") || !strings.Contains(body, "gpt-image-2") || !strings.Contains(body, `"operation":"image_generation"`) || !strings.Contains(body, `"operation":"image_edits"`) {
 		t.Fatalf("catalog missing fixed scope or representative model: %s", body)
+	}
+	var payload struct {
+		Data []LocalModelCatalogItem `json:"data"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("catalog response is not valid JSON: %v", err)
+	}
+	for _, unknownModel := range []string{"glm-5.2", "kimi-k3", "deepseek-v4-pro"} {
+		found := false
+		for _, item := range payload.Data {
+			if item.Model == unknownModel {
+				found = true
+				if item.Testable || item.Verified != "unknown" {
+					t.Fatalf("unknown model %q has unsafe local status: %#v", unknownModel, item)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("catalog missing unknown model %q", unknownModel)
+		}
 	}
 }
 

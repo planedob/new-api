@@ -7,9 +7,8 @@ import type {
 } from "./types";
 
 export const LOCAL_IMAGE_FIXTURE = "local-fixed-256x256.png";
-const imageSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#0f766e"/><stop offset="1" stop-color="#164e63"/></linearGradient></defs><rect width="512" height="512" rx="36" fill="url(#g)"/><circle cx="150" cy="160" r="70" fill="#fef3c7" opacity=".9"/><path d="M70 418 205 250l82 92 54-58 104 134Z" fill="#99f6e4" opacity=".85"/><text x="256" y="468" text-anchor="middle" fill="white" font-family="sans-serif" font-size="26">LOCAL / ISOLATED</text></svg>`;
 const videoSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="#111827"/><rect x="60" y="60" width="840" height="420" rx="28" fill="#1e3a8a"/><circle cx="480" cy="270" r="72" fill="#f59e0b"/><path d="m460 228 82 42-82 42Z" fill="#111827"/><text x="480" y="430" text-anchor="middle" fill="white" font-family="sans-serif" font-size="30">LOCAL H3 VIDEO FIXTURE</text></svg>`;
-export const LOCAL_IMAGE_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(imageSvg)}`;
+export const LOCAL_IMAGE_DATA_URL = `/${LOCAL_IMAGE_FIXTURE}`;
 export const LOCAL_VIDEO_DATA_URL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(videoSvg)}`;
 
 export const LOCAL_CATALOG: CatalogModel[] = [
@@ -108,7 +107,7 @@ export const LOCAL_CATALOG: CatalogModel[] = [
     parameter_bounds: { stream: true, max_tokens: 32768 },
     cataloged: true,
     selectable: true,
-    testable: true,
+    testable: false,
     verified: "unknown",
     verification_scope: "LOCAL_FIXTURE",
     price_summary: "按 token（脱敏快照）",
@@ -128,7 +127,7 @@ export const LOCAL_CATALOG: CatalogModel[] = [
     parameter_bounds: { stream: true, max_tokens: 32768 },
     cataloged: true,
     selectable: true,
-    testable: true,
+    testable: false,
     verified: "unknown",
     verification_scope: "LOCAL_FIXTURE",
     price_summary: "按 token（脱敏快照）",
@@ -148,7 +147,7 @@ export const LOCAL_CATALOG: CatalogModel[] = [
     parameter_bounds: { stream: true, max_tokens: 32768 },
     cataloged: true,
     selectable: true,
-    testable: true,
+    testable: false,
     verified: "unknown",
     verification_scope: "LOCAL_FIXTURE",
     price_summary: "按 token（脱敏快照）",
@@ -217,6 +216,15 @@ function localId(prefix: string): string {
       : `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   return `${prefix}-${suffix}`;
 }
+
+function isLocalModelTestable(model: string): boolean {
+  return LOCAL_CATALOG.some(
+    (item) =>
+      item.model === model &&
+      item.testable &&
+      item.verified === "local_fixture",
+  );
+}
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -260,6 +268,32 @@ export async function runLocalFakeRequest(input: {
 }): Promise<FakeResponse> {
   const started = Date.now();
   const contract = endpointForOperation(input.operation);
+  if (!isLocalModelTestable(input.model)) {
+    const blockedEvent: LocalRequestEvent = {
+      id: localId("local"),
+      operation: input.operation,
+      endpoint: contract.endpoint,
+      method: contract.method,
+      model: input.model,
+      scenario: input.scenario,
+      request_shape: contract.request_shape,
+      upstream_called: false,
+      retried: false,
+      simulated_billing: false,
+      status: 400,
+      stage: "catalog_model_not_testable",
+      final_status: "failed",
+      duration_ms: Date.now() - started,
+      created_at: new Date().toISOString(),
+    };
+    input.onEvent?.(blockedEvent);
+    throw new FakeUpstreamError(
+      "该模型尚未通过本地 fixture 验证，不能执行体验请求",
+      blockedEvent,
+      400,
+      "catalog_model_not_testable",
+    );
+  }
   const event: LocalRequestEvent = {
     id: localId("local"),
     operation: input.operation,
